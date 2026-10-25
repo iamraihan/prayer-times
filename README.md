@@ -7,6 +7,9 @@
 A cross-platform (Windows, macOS, Ubuntu/Linux) prayer-times app built with
 Tauri 2, using the [Aladhan API](https://aladhan.com/prayer-times-api).
 
+**Website:** [raihanali.com/prayer-times](https://raihanali.com/prayer-times) —
+feature overview and downloads for Windows, macOS & Linux.
+
 - **System tray status** — next prayer, countdown and window end time in the
   tray tooltip/menu (Windows taskbar corner, macOS menu bar, Ubuntu app
   indicator). Left-click the tray icon to open the app; closing the window
