@@ -455,27 +455,30 @@ export function SettingsPage() {
             <FolderOpen className="h-3.5 w-3.5" aria-hidden /> Choose file…
           </Button>
         </SettingRow>
-        <SettingRow
-          label="Preview an alarm"
-          hint="Shows the popup, notification and sound as they'll appear. Nothing is marked done or snoozed."
-        >
-          {(
-            [
-              ["getReady", "Get ready"],
-              ["start", "Prayer time"],
-              ["preEnd", "Don't miss it"],
-            ] as const
-          ).map(([kind, label]) => (
-            <Button
-              key={kind}
-              size="sm"
-              variant="ghost"
-              onClick={() => void previewAlarm(kind).catch((e) => setToneError(friendlyError(e)))}
-            >
-              {label}
-            </Button>
-          ))}
-        </SettingRow>
+        {/* Development builds only: a tool for checking the popup design. */}
+        {import.meta.env.DEV && (
+          <SettingRow
+            label="Preview an alarm (dev)"
+            hint="Development builds only. Shows the popup, notification and sound. Nothing is marked done or snoozed."
+          >
+            {(
+              [
+                ["getReady", "Get ready"],
+                ["start", "Prayer time"],
+                ["preEnd", "Don't miss it"],
+              ] as const
+            ).map(([kind, label]) => (
+              <Button
+                key={kind}
+                size="sm"
+                variant="ghost"
+                onClick={() => void previewAlarm(kind).catch((e) => setToneError(friendlyError(e)))}
+              >
+                {label}
+              </Button>
+            ))}
+          </SettingRow>
+        )}
         {toneError && (
           <p role="alert" className="px-4 py-3 text-[13px] text-red-300">
             {toneError}

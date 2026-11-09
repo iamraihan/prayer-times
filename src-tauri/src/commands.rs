@@ -279,13 +279,17 @@ pub fn alarm_snooze(shared: State<'_, SharedEngine>, minutes: i64) -> AppStateDt
     })
 }
 
-/// Settings → "Preview an alarm": shows a pretend alarm (popup, notification,
-/// sound) so users can see what will ring. Marks nothing done.
+/// Development builds only (`pnpm tauri dev`): shows a pretend alarm
+/// (popup, notification, sound) to check the design. Marks nothing done.
+/// Release builds refuse it.
 #[tauri::command]
 pub fn preview_alarm(
     shared: State<'_, SharedEngine>,
     kind: engine::AlarmKind,
 ) -> Result<AppStateDto, String> {
+    if !cfg!(debug_assertions) {
+        return Err("Alarm preview is only available in development builds".into());
+    }
     with_engine(&shared, |engine| {
         engine.preview_alarm(kind)?;
         Ok(engine.snapshot())

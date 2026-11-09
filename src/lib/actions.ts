@@ -44,7 +44,7 @@ export async function importBackup(path: string, includeSettings: boolean): Prom
   apply(await api.importBackup(path, includeSettings));
 }
 
-/** Shows a pretend alarm (popup, notification, sound); marks nothing done. */
+/** Development builds only: shows a pretend alarm; marks nothing done. */
 export async function previewAlarm(kind: AlarmKind): Promise<void> {
   apply(await api.previewAlarm(kind));
 }
