@@ -8,7 +8,7 @@ import {
   type Prayer,
   type PrayerTime,
 } from "../lib/types";
-import { fmtHM, type TimeFormat } from "../lib/time";
+import { fmtHM, parseHM, type TimeFormat } from "../lib/time";
 import { setPrayerDone } from "../lib/actions";
 import { cn } from "../lib/cn";
 
@@ -28,7 +28,7 @@ export function PrayerList() {
     );
   }
 
-  const mode: TimeFormat = state.settings.timeFormat === "24h" ? "24h" : "12h";
+  const mode: TimeFormat = state.settings.timeFormat;
   const today = state.today;
   const nextPrayer = state.next?.prayer;
   const done = state.doneToday ?? {};
@@ -86,28 +86,12 @@ interface PrayerRowProps {
 
 function PrayerRow({ time, mode, done, isNext, now }: PrayerRowProps) {
   const prayer: Prayer = time.prayer;
-  const [sh, sm] = time.start.split(":").map(Number);
-  const [eh, em] = time.ends.split(":").map(Number);
-  // Compose today's date in the location timezone via the day string.
-  // The ISO strings from `state.next` carry the true offset; for rows we
-  // compare against the location-local "now" pushed by the backend snapshot
-  // via its next/done fields instead of raw math, so a simple h/m comparison
-  // within the same day is sufficient.
-  const nowDate = new Date(now);
-  const startMs = new Date(
-    nowDate.getFullYear(),
-    nowDate.getMonth(),
-    nowDate.getDate(),
-    sh,
-    sm,
-  ).getTime();
-  const endMs = new Date(
-    nowDate.getFullYear(),
-    nowDate.getMonth(),
-    nowDate.getDate(),
-    eh,
-    em,
-  ).getTime();
+  // The backend sends each window as exact instants in the location's
+  // timezone, so this works when the device is in another zone and when
+  // Isha's window runs past midnight. Fall back to same-day wall-clock math
+  // for older snapshots without them.
+  const startMs = time.startAt ? Date.parse(time.startAt) : wallClockToday(now, time.start);
+  const endMs = time.endsAt ? Date.parse(time.endsAt) : wallClockToday(now, time.ends);
   const started = now >= startMs;
   const inWindow = started && now < endMs;
 
@@ -164,6 +148,13 @@ function PrayerRow({ time, mode, done, isNext, now }: PrayerRowProps) {
       </span>
     </li>
   );
+}
+
+function wallClockToday(now: number, hm: string): number {
+  const t = parseHM(hm);
+  if (!t) return NaN;
+  const d = new Date(now);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), t.h, t.m).getTime();
 }
 
 function DoneCheckbox({

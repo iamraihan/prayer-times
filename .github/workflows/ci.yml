@@ -1,5 +1,5 @@
 # Quick sanity gate for every push / PR: the frontend builds and the Rust
-# backend type-checks on all three platforms.
+# backend type-checks and passes its unit tests on all three platforms.
 name: CI
 
 on:
@@ -43,3 +43,15 @@ jobs:
 
       - name: Type-check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # `cargo test` regenerates src/lib/bindings from the Rust DTOs (ts-rs).
+      # Any diff means someone changed a Rust type without committing the
+      # regenerated TypeScript.
+      - name: TypeScript bindings are up to date
+        if: runner.os == 'Linux'
+        run: |
+          git add -N src/lib/bindings
+          git diff --exit-code -- src/lib/bindings

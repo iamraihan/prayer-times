@@ -7,6 +7,11 @@
 //!   alarms still fire correctly after system sleep/wake or clock changes.
 //! - Events missed while the app was closed fire late within a 10-minute
 //!   grace window; beyond that they are marked as fired silently.
+//! - Per-day state follows the Prayer Day (see `schedule::prayer_day`), not
+//!   the calendar day, so an Isha window that runs past midnight keeps its
+//!   alarms, snoozes and done mark until it closes.
+//! - The decisions themselves live in `schedule` (pure, unit-tested); this
+//!   module applies them and performs the side effects.
 //! - Network fetches happen on the engine thread outside the state lock.
 
 use std::collections::{HashMap, HashSet};
@@ -20,22 +25,22 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::aladhan::{self, DayTimings};
 use crate::models::{
-    ActiveAlarmDto, AlarmMessageDto, AppStateDto, DayTimingsDto, Location, NextPrayerDto,
+    ActiveAlarmDto, AlarmMessageDto, AppStateDto, AsrSchool, DayTimingsDto, Location, NextPrayerDto,
     Prayer, PrayerTimeDto, Settings,
 };
-use crate::schedule::{self, EventKind, PlannedEvent};
+use crate::schedule::{self, Due, EventKind, PlannedEvent};
 use crate::sound::Sound;
 use crate::{alarm, runtime, settings as settings_io, timeutil, tray};
 
 pub const TICK_SECONDS: u64 = 15;
-/// Fire events up to this long after their scheduled time; older ones are skipped.
-const GRACE_SECS: i64 = 10 * 60;
 /// Sound + popup auto-stop when nobody answers.
 const ALARM_AUTO_STOP_SECS: i64 = 2 * 60;
 /// Minimum wait between retries of a failed month fetch.
 const RETRY_AFTER: StdDuration = StdDuration::from_secs(60);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub enum AlarmKind {
     Start,
     Reminder,
@@ -87,7 +92,7 @@ pub struct FetchJob {
     pub city: String,
     pub country: String,
     pub method: u8,
-    pub school: u8,
+    pub school: AsrSchool,
 }
 
 pub struct Engine {
@@ -174,7 +179,6 @@ impl Engine {
     // -- public API used by commands --------------------------------------
 
     pub fn apply_settings(&mut self, mut settings: Settings) -> Result<(), String> {
-        settings = settings.normalized();
         // The alarm tone is owned by set_alarm_tone/reset_alarm_tone (they
         // apply instantly); ignore whatever value a settings draft carries,
         // otherwise "Save changes" would reset a just-picked tone to default.
@@ -225,7 +229,7 @@ impl Engine {
             .map_err(|e| format!("couldn't save settings: {e}"))
     }
 
-    pub fn save_location(&mut self, location: Location, method: u8, school: u8) {
+    pub fn save_location(&mut self, location: Location, method: u8, school: AsrSchool) {
         self.settings.method = method;
         self.settings.school = school;
         self.settings.location = Some(location);
@@ -304,11 +308,10 @@ impl Engine {
         if let Some(location) = &settings.location {
             if let Some(tz) = timeutil::parse_tz(&location.timezone) {
                 let now = Utc::now().with_timezone(&tz);
-                if let Some(day) = self.day_timings(now.date_naive()) {
-                    let from_cache = self
-                        .month_from_cache(now.date_naive())
-                        .unwrap_or(false);
-                    today_dto = Some(day_timings_dto(&day, from_cache));
+                let pday = self.prayer_day(now, tz);
+                if let Some(day) = self.day_timings(pday) {
+                    let from_cache = self.month_from_cache(pday).unwrap_or(false);
+                    today_dto = Some(day_timings_dto(&day, Some(tz), from_cache));
                     if let Some(next) = self.compute_next(now, tz) {
                         next_dto = Some(NextPrayerDto {
                             prayer: next.prayer,
@@ -334,7 +337,7 @@ impl Engine {
             active_alarm: self.active_alarm.as_ref().map(|a| ActiveAlarmDto {
                 id: a.id.clone(),
                 prayer: a.prayer,
-                kind: a.kind.id().to_string(),
+                kind: a.kind,
                 started_at: a.fired_at.to_rfc3339(),
                 ends_at: a.ends_at.to_rfc3339(),
                 message: a.message.clone(),
@@ -349,21 +352,25 @@ impl Engine {
         let Some(location) = self.settings.location.clone() else {
             return Vec::new();
         };
-        if timeutil::parse_tz(&location.timezone).is_none() {
+        let Some(tz) = timeutil::parse_tz(&location.timezone) else {
             return Vec::new();
-        }
-        let now = Utc::now();
-        let mut wanted = Vec::new();
-        // Today for the schedule, tomorrow for the "next prayer" rollover
-        // (e.g. Isha is the last prayer of the day and next is tomorrow's Fajr).
-        wanted.push(now.date_naive());
-        if let Some(tomorrow) = now.date_naive().succ_opt() {
-            wanted.push(tomorrow);
+        };
+        // Dates in the *location's* zone (not UTC): yesterday for an Isha
+        // window still open past midnight, today for the schedule, tomorrow
+        // for the "next prayer" rollover to tomorrow's Fajr.
+        let today = Utc::now().with_timezone(&tz).date_naive();
+        let wanted = [today.pred_opt(), Some(today), today.succ_opt()];
+
+        let mut keys: Vec<(i32, u32)> = Vec::new();
+        for date in wanted.into_iter().flatten() {
+            let key = (date.year(), date.month());
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
         }
 
         let mut jobs = Vec::new();
-        for date in wanted {
-            let key = (date.year(), date.month());
+        for key in keys {
             if self.months.contains_key(&key) {
                 continue;
             }
@@ -433,9 +440,9 @@ impl Engine {
             return;
         };
         let now = Utc::now().with_timezone(&tz);
-        let today = now.date_naive();
+        let today = self.prayer_day(now, tz);
 
-        // Day rollover: reset per-day state.
+        // Prayer Day rollover: reset per-day state.
         if self.day != Some(today) {
             self.day = Some(today);
             self.fired.clear();
@@ -466,7 +473,7 @@ impl Engine {
         let due_snoozes: Vec<(Prayer, String)> = self
             .snoozes
             .iter()
-            .filter(|(_, at)| **at <= Utc::now())
+            .filter(|(_, at)| **at <= now)
             .map(|(prayer, at)| (*prayer, runtime::encode_dt(at)))
             .collect();
         for (prayer, encoded_at) in due_snoozes {
@@ -486,28 +493,28 @@ impl Engine {
                 continue;
             }
             let id = schedule::event_id(today, event.prayer, event.kind);
-            if event.at <= now {
-                let age = now - event.at;
-                if age <= Duration::seconds(GRACE_SECS) {
-                    if !self.fired.contains(&id) {
-                        // A delayed main alarm speaks the "you still have …"
-                        // message, otherwise "it's time to pray".
-                        let kind = if event.kind == EventKind::Start && event.delayed {
-                            AlarmKind::Reminder
-                        } else {
-                            AlarmKind::from(event.kind)
-                        };
-                        self.fire(event.prayer, kind, event.start, event.end, now, id);
-                    }
-                } else {
+            match schedule::due(event.at, now, self.fired.contains(&id)) {
+                Due::Fire => {
+                    // A delayed main alarm speaks the "you still have …"
+                    // message, otherwise "it's time to pray".
+                    let kind = if event.kind == EventKind::Start && event.delayed {
+                        AlarmKind::Reminder
+                    } else {
+                        AlarmKind::from(event.kind)
+                    };
+                    self.fire(event.prayer, kind, event.start, event.end, now, id);
+                }
+                Due::SkipMissed => {
                     // Missed for too long (app closed / asleep): skip silently.
                     self.fired.insert(id);
                     self.dirty = true;
                 }
-            } else if self.fired.contains(&id) {
-                // Settings changed and moved this event back into the future.
-                self.fired.remove(&id);
-                self.dirty = true;
+                Due::Rearm => {
+                    // Settings changed and moved this event back into the future.
+                    self.fired.remove(&id);
+                    self.dirty = true;
+                }
+                Due::Wait => {}
             }
         }
 
@@ -574,7 +581,7 @@ impl Engine {
         end: DateTime<Tz>,
         now: DateTime<Tz>,
     ) -> AlarmMessageDto {
-        let mode_24h = self.settings.time_format == "24h";
+        let mode_24h = self.settings.time_format.is_24h();
         let fmt = |d: &DateTime<Tz>| alarm::fmt_time(d, mode_24h);
         let left = (end - now).num_minutes().max(0);
         let title = prayer.title();
@@ -647,60 +654,36 @@ impl Engine {
             .map(|m| m.from_cache)
     }
 
+    /// The Prayer Day `now` belongs to (yesterday while its Isha window is
+    /// still open past midnight).
+    fn prayer_day(&self, now: DateTime<Tz>, tz: Tz) -> NaiveDate {
+        let yesterday = now
+            .date_naive()
+            .pred_opt()
+            .and_then(|d| self.day_timings(d));
+        schedule::prayer_day(now, tz, yesterday.as_ref())
+    }
+
     /// The prayer the UI should feature: the one whose window is currently
     /// open (and not marked done), else the next upcoming start (possibly
-    /// tomorrow's Fajr), else None (all done).
+    /// the next Prayer Day's Fajr).
     fn compute_next(&self, now: DateTime<Tz>, tz: Tz) -> Option<NextInfo> {
-        let today = now.date_naive();
-        let day = self.day_timings(today)?;
+        let pday = self.prayer_day(now, tz);
+        let day = self.day_timings(pday)?;
         let events = schedule::compute(&day, tz, &self.settings);
 
-        let mut current: Option<&PlannedEvent> = None;
-        let mut upcoming: Option<&PlannedEvent> = None;
-        for event in &events {
-            if self.is_done(event.prayer) {
-                continue;
-            }
-            if now >= event.start && now < event.end {
-                current = Some(event);
-                break;
-            }
-            if event.kind == EventKind::Start && event.at > now {
-                let better = upcoming.map(|u| event.at < u.at).unwrap_or(true);
-                if better {
-                    upcoming = Some(event);
-                }
-            }
-        }
-
-        if let Some(event) = current {
+        if let Some((event, is_current)) = schedule::featured(&events, now, |p| self.is_done(p)) {
             return Some(NextInfo {
                 prayer: event.prayer,
                 start: event.start,
                 end: event.end,
-                is_current: true,
-            });
-        }
-        if let Some(event) = upcoming {
-            return Some(NextInfo {
-                prayer: event.prayer,
-                start: event.start,
-                end: event.end,
-                is_current: false,
+                is_current,
             });
         }
 
-        // After Isha: tomorrow's Fajr.
-        let tomorrow = today.succ_opt()?;
-        let next_day = self.day_timings(tomorrow)?;
-        let fajr = *next_day.times.get(&Prayer::Fajr)?;
-        let start = timeutil::resolve(tz, tomorrow, fajr)?;
-        let end = timeutil::resolve_after(
-            tz,
-            tomorrow,
-            schedule::end_time_of(Prayer::Fajr, &next_day),
-            fajr,
-        )?;
+        // After Isha: the next Prayer Day's Fajr.
+        let next_day = self.day_timings(pday.succ_opt()?)?;
+        let (start, end) = schedule::window(Prayer::Fajr, &next_day, tz)?;
         Some(NextInfo {
             prayer: Prayer::Fajr,
             start,
@@ -716,7 +699,7 @@ impl Engine {
         now: DateTime<Tz>,
         events: &[PlannedEvent],
     ) {
-        let mode_24h = self.settings.time_format == "24h";
+        let mode_24h = self.settings.time_format.is_24h();
         let fmt = |d: &DateTime<Tz>| alarm::fmt_time(d, mode_24h);
 
         let next = self.compute_next(now, tz);
@@ -851,8 +834,9 @@ fn location_key(settings: &Settings) -> Option<(String, String)> {
         .map(|l| (l.city.clone(), l.country_code.clone()))
 }
 
-/// Builds the wire format for one day.
-pub fn day_timings_dto(day: &DayTimings, from_cache: bool) -> DayTimingsDto {
+/// Builds the wire format for one day. With `tz`, each prayer also carries
+/// its window as exact instants (so the UI never does wall-clock math).
+pub fn day_timings_dto(day: &DayTimings, tz: Option<Tz>, from_cache: bool) -> DayTimingsDto {
     DayTimingsDto {
         date: day.date.format("%Y-%m-%d").to_string(),
         gregorian: day.readable.clone(),
@@ -862,12 +846,17 @@ pub fn day_timings_dto(day: &DayTimings, from_cache: bool) -> DayTimingsDto {
         timings: Prayer::ALL
             .iter()
             .filter_map(|prayer| {
-                day.times.get(prayer).map(|&start| PrayerTimeDto {
-                    prayer: *prayer,
-                    start: start.format("%H:%M").to_string(),
-                    ends: schedule::end_time_of(*prayer, day)
-                        .format("%H:%M")
-                        .to_string(),
+                day.times.get(prayer).map(|&start| {
+                    let window = tz.and_then(|tz| schedule::window(*prayer, day, tz));
+                    PrayerTimeDto {
+                        prayer: *prayer,
+                        start: start.format("%H:%M").to_string(),
+                        ends: schedule::end_time_of(*prayer, day)
+                            .format("%H:%M")
+                            .to_string(),
+                        start_at: window.map(|(s, _)| s.to_rfc3339()),
+                        ends_at: window.map(|(_, e)| e.to_rfc3339()),
+                    }
                 })
             })
             .collect(),

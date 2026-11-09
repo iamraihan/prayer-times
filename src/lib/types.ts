@@ -1,11 +1,28 @@
 /**
- * Shared types mirroring the Rust DTOs in `src-tauri/src/models.rs`.
- * Keep both sides in sync when changing a shape.
+ * Frontend view of the IPC types. The shapes themselves are generated from
+ * the Rust DTOs into `./bindings/` by `cargo test` (ts-rs) — change the Rust
+ * struct, rerun `cargo test`, and these follow. Only UI-only constants live
+ * here.
  */
+import type { Prayer } from "./bindings/Prayer";
 
-export type Prayer = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
+export type { Prayer } from "./bindings/Prayer";
+export type { AlarmKind } from "./bindings/AlarmKind";
+export type { AsrSchool } from "./bindings/AsrSchool";
+export type { TimeFormat } from "./bindings/TimeFormat";
+export type { Location } from "./bindings/Location";
+export type { Settings } from "./bindings/Settings";
+export type { PreviewRequest } from "./bindings/PreviewRequest";
+export type { PrayerSettings as PrayerReminderSettings } from "./bindings/PrayerSettings";
+export type { PrayerTimeDto as PrayerTime } from "./bindings/PrayerTimeDto";
+export type { DayTimingsDto as DayTimings } from "./bindings/DayTimingsDto";
+export type { AlarmMessageDto as AlarmMessage } from "./bindings/AlarmMessageDto";
+export type { ActiveAlarmDto as ActiveAlarm } from "./bindings/ActiveAlarmDto";
+export type { NextPrayerDto as NextPrayerInfo } from "./bindings/NextPrayerDto";
+export type { AppStateDto as AppState } from "./bindings/AppStateDto";
+export type { LocationPreviewDto as LocationPreview } from "./bindings/LocationPreviewDto";
 
-export const PRAYERS: Prayer[] = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
+export const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const satisfies readonly Prayer[];
 
 export const PRAYER_LABELS: Record<Prayer, string> = {
   fajr: "Fajr",
@@ -22,95 +39,3 @@ export const PRAYER_EMOJIS: Record<Prayer, string> = {
   maghrib: "🌇",
   isha: "🌙",
 };
-
-export interface Location {
-  city: string;
-  country: string;
-  countryCode: string;
-  timezone: string;
-}
-
-export interface PrayerReminderSettings {
-  /** Master switch for this prayer's alarms (main / pre-end). */
-  enabled: boolean;
-  /** Delay the main alarm N minutes after the prayer's start time; null = alarm exactly at start (Maghrib default). */
-  reminderMinutes: number | null;
-}
-
-export interface Settings {
-  location: Location | null;
-  method: number;
-  /** 0 = Standard (Shafi), 1 = Hanafi — affects Asr. */
-  school: 0 | 1;
-  timeFormat: "12h" | "24h";
-  notificationsEnabled: boolean;
-  soundEnabled: boolean;
-  /** 0.0 – 1.0 */
-  soundVolume: number;
-  /** Custom alarm tone file name inside the app config dir; null = built-in chime. */
-  alarmSound: string | null;
-  popupEnabled: boolean;
-  preEndWarningEnabled: boolean;
-  preEndWarningMinutes: number;
-  prayerSettings: Record<Prayer, PrayerReminderSettings>;
-}
-
-export interface PrayerTime {
-  prayer: Prayer;
-  /** "HH:MM" in the location's timezone. */
-  start: string;
-  /** "HH:MM" in the location's timezone. */
-  ends: string;
-}
-
-export interface DayTimings {
-  /** Location-local date, "YYYY-MM-DD". */
-  date: string;
-  gregorian: string;
-  hijri: string;
-  sunrise: string;
-  midnight: string;
-  timings: PrayerTime[];
-  /** True when serving from the offline disk cache instead of a fresh API response. */
-  fromCache: boolean;
-}
-
-export type AlarmKind = "start" | "reminder" | "preEnd" | "snooze";
-
-export interface AlarmMessage {
-  title: string;
-  body: string;
-}
-
-export interface ActiveAlarm {
-  id: string;
-  prayer: Prayer;
-  kind: AlarmKind;
-  startedAt: string;
-  /** Prayer-window end (ISO) — for the popup's live countdown. */
-  endsAt: string;
-  message: AlarmMessage;
-}
-
-export interface NextPrayerInfo {
-  prayer: Prayer;
-  startAt: string;
-  endsAt: string;
-}
-
-export interface AppState {
-  hasLocation: boolean;
-  settings: Settings;
-  today: DayTimings | null;
-  next: NextPrayerInfo | null;
-  doneToday: Partial<Record<Prayer, true>>;
-  /** Pending snoozed reminders: prayer -> due instant (ISO). */
-  snoozes: Partial<Record<Prayer, string>>;
-  activeAlarm: ActiveAlarm | null;
-  apiError: string | null;
-}
-
-export interface LocationPreview {
-  location: Location;
-  day: DayTimings;
-}

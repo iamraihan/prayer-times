@@ -23,7 +23,6 @@ pub fn load(app: &AppHandle) -> Settings {
         .ok()
         .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
         .unwrap_or_default()
-        .normalized()
 }
 
 pub fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {

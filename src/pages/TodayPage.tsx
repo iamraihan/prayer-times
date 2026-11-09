@@ -11,7 +11,7 @@ export function TodayPage() {
   const state = useAppState();
   const today = state?.today;
   const location = state?.settings.location;
-  const mode = state?.settings.timeFormat === "24h" ? "24h" : "12h";
+  const mode = state?.settings.timeFormat ?? "12h";
   const snoozes = Object.entries(state?.snoozes ?? {}) as [Prayer, string][];
 
   return (

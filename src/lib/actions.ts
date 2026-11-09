@@ -4,7 +4,7 @@
  * UI event -> action -> Rust -> new AppState -> store -> re-render.
  */
 import { api, type PreviewRequest } from "./ipc";
-import type { Location, LocationPreview, Prayer, Settings } from "./types";
+import type { AsrSchool, Location, LocationPreview, Prayer, Settings } from "./types";
 import { useAppStore } from "../store/useAppStore";
 
 function apply(s: Awaited<ReturnType<typeof api.getState>>): void {
@@ -14,7 +14,7 @@ function apply(s: Awaited<ReturnType<typeof api.getState>>): void {
 export async function saveLocation(
   location: Location,
   method: number,
-  school: number,
+  school: AsrSchool,
 ): Promise<void> {
   apply(await api.saveLocation(location, method, school));
 }

@@ -33,6 +33,10 @@ reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
 ] }
 rodio = { version = "0.20", features = ["wav", "mp3", "vorbis", "flac"] }
+ts-rs = { version = "11", features = ["serde-compat"] }
+
+[lints.rust]
+unsafe_code = "forbid"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

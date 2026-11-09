@@ -37,7 +37,7 @@ export function NextPrayerCard() {
     );
   }
 
-  const mode: TimeFormat = state.settings.timeFormat === "24h" ? "24h" : "12h";
+  const mode: TimeFormat = state.settings.timeFormat;
   const startMs = new Date(next.startAt).getTime();
   const endMs = new Date(next.endsAt).getTime();
   const isCurrent = now >= startMs && now < endMs;
@@ -99,10 +99,10 @@ export function NextPrayerCard() {
 }
 
 /** "HH:MM" for an ISO string in the location's timezone (already offset-encoded). */
+/** "HH:MM" in the *location's* timezone: the backend's RFC3339 strings carry
+ * the location offset ("2026-11-09T12:20:00+06:00"), so read the wall clock
+ * straight from the string instead of converting to the device zone. */
 function hmOfDay(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "--:--";
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
+  const m = /T(\d{2}):(\d{2})/.exec(iso);
+  return m ? `${m[1]}:${m[2]}` : "--:--";
 }

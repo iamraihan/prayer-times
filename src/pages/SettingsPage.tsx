@@ -20,7 +20,7 @@ import {
 } from "../lib/actions";
 import { METHODS } from "../lib/methods";
 import { PRAYERS, PRAYER_LABELS, type Prayer, type Settings } from "../lib/types";
-import { fmtClock } from "../lib/time";
+import { fmtClock, parseHM } from "../lib/time";
 import { cn } from "../lib/cn";
 
 /**
@@ -56,13 +56,13 @@ export function SettingsPage() {
 
   // "Alarm at 12:16 PM" — today's start time + the draft's delay minutes.
   function reminderHint(prayer: Prayer): string | null {
-    const mins = draft?.prayerSettings[prayer]?.reminderMinutes;
-    const start = state?.today?.timings.find((t) => t.prayer === prayer)?.start;
+    const mins = draft?.prayerSettings[prayer].reminderMinutes;
+    const hm = state?.today?.timings.find((t) => t.prayer === prayer)?.start;
+    const start = hm ? parseHM(hm) : null;
     if (!start) return null;
-    const [h, m] = start.split(":").map(Number);
     const d = new Date();
-    d.setHours(h, (m ?? 0) + (mins ?? 0), 0, 0);
-    const mode = draft?.timeFormat === "24h" ? "24h" : "12h";
+    d.setHours(start.h, start.m + (mins ?? 0), 0, 0);
+    const mode = draft?.timeFormat ?? "12h";
     return `Alarm at ${fmtClock(d, mode)}`;
   }
 
@@ -549,7 +549,7 @@ function Row({
   children,
 }: {
   label: string;
-  hint?: string;
+  hint?: string | undefined;
   children: ReactNode;
 }) {
   return (
@@ -604,18 +604,8 @@ function keepEdit<K extends keyof Settings>(
   if (!sameJson(draft[key], prev[key])) out[key] = draft[key];
 }
 
-// Key-order-insensitive: `prayerSettings` comes from a Rust HashMap whose
-// iteration order can change after each save, which must not count as an edit.
+// Settings serialize from Rust structs, so key order is fixed and a plain
+// JSON comparison is exact.
 function sameJson(a: unknown, b: unknown): boolean {
-  return stableJson(a) === stableJson(b);
-}
-
-function stableJson(v: unknown): string {
-  return JSON.stringify(v, (_k, val: unknown) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(
-          Object.entries(val as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
-        )
-      : val,
-  );
+  return JSON.stringify(a) === JSON.stringify(b);
 }

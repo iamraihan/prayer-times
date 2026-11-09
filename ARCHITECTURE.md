@@ -54,6 +54,8 @@ windows are hidden.
 
 `id = "{date}|{prayer}|{start|reminder|preEnd}"`
 
+- "day" here is the **Prayer Day** (`schedule::prayer_day`): the calendar
+  date, except while yesterday's Isha window is still open past midnight.
 - `fired` (persisted in `runtime.json`) prevents replays after restart;
   on restart, events older than the grace window are marked fired silently.
 - `done` marks suppress all remaining events of that prayer for the day and
@@ -72,7 +74,8 @@ src/
   pages/                      TodayPage, SettingsPage
   components/                 feature components + ui/ primitives
   store/useAppStore.ts        single zustand store (state + 1s clock)
-  lib/                        types (mirror of models.rs), ipc wrappers,
+  lib/                        bindings/ (generated from models.rs), types,
+                               typed ipc wrappers,
                                actions, time format helpers, static data
 ```
 
@@ -80,8 +83,11 @@ Rules of thumb:
 
 - **One store, backend as source of truth.** UI never computes schedule
   logic; it renders the snapshot and sends intents via `lib/actions.ts`.
-- **Keep DTOs in sync**: `src/lib/types.ts` ↔ `src-tauri/src/models.rs`
-  (both camelCase). Change them together.
+- **IPC types are generated, never hand-written**: every Rust type that
+  crosses IPC derives `ts_rs::TS`; `cargo test` writes its TypeScript twin
+  to `src/lib/bindings/` (commit the result — CI fails on a stale diff).
+  `src/lib/types.ts` only re-exports them; `src/lib/ipc.ts` maps each command
+  name to its argument and result types.
 
 ## Extending
 
@@ -95,8 +101,12 @@ Rules of thumb:
   a summary command.
 - **Autostart on login**: add `tauri-plugin-autostart`, init in `lib.rs`,
   toggle in Settings.
-- **Unit tests**: `schedule.rs`, `timeutil.rs` and `aladhan::parse_hm` are
-  pure — ideal for `#[cfg(test)]` tests; the engine itself stays thin.
+- **Unit tests**: run `cargo test` in `src-tauri/` (CI runs it on all three
+  OSes). Scheduling decisions live in `schedule.rs` as pure functions that
+  take `now` as a parameter (`compute`, `window`, `prayer_day`, `due`,
+  `featured`) and are tested there; `timeutil.rs` and `aladhan.rs` parsing
+  have tests too. Put new decision logic in `schedule.rs`, not `engine.rs`,
+  so it can be tested without a running app.
 
 ## Deliberate decisions
 
@@ -104,6 +114,8 @@ Rules of thumb:
   sleep/wake and clock changes; missed events fire late within grace.
 - **Wall-clock math in the location's IANA zone** (from the API), never the
   device zone.
+- **Per-day state follows the Prayer Day, not the calendar day** — see
+  [ADR 0001](docs/adr/0001-prayer-day-rollover.md).
 - **Month-granularity caching** keeps the app fully offline for the current
   month and costs one request per month online.
 - **Fetches happen only on the engine thread, outside the state lock**, so

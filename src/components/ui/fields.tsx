@@ -9,7 +9,7 @@ const fieldBase =
   "w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 " +
   "placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none disabled:opacity-50";
 
-export function Label({ children, hint }: { children: ReactNode; hint?: string }) {
+export function Label({ children, hint }: { children: ReactNode; hint?: string | undefined }) {
   return (
     <label className="mb-1.5 flex items-baseline justify-between gap-2 text-xs font-medium text-slate-300">
       <span>{children}</span>
@@ -20,7 +20,7 @@ export function Label({ children, hint }: { children: ReactNode; hint?: string }
 
 export interface TextFieldProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
-  hint?: string;
+  hint?: string | undefined;
 }
 
 export function TextField({ label, hint, className, ...rest }: TextFieldProps) {
@@ -34,7 +34,7 @@ export function TextField({ label, hint, className, ...rest }: TextFieldProps) {
 
 export interface NumberFieldProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
-  hint?: string;
+  hint?: string | undefined;
 }
 
 export function NumberField({ label, hint, className, ...rest }: NumberFieldProps) {
@@ -49,7 +49,7 @@ export function NumberField({ label, hint, className, ...rest }: NumberFieldProp
 export interface SelectFieldProps
   extends SelectHTMLAttributes<HTMLSelectElement> {
   label?: string;
-  hint?: string;
+  hint?: string | undefined;
   children: ReactNode;
 }
 

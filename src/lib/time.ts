@@ -1,10 +1,20 @@
-export type TimeFormat = "12h" | "24h";
+import type { TimeFormat } from "./types";
+
+export type { TimeFormat };
+
+/** Parses a 24h "HH:MM" string; `null` when it isn't one. */
+export function parseHM(hm: string): { h: number; m: number } | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(hm.trim());
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  return h < 24 && m < 60 ? { h, m } : null;
+}
 
 /** Formats a "HH:MM" 24h string per the requested format. */
 export function fmtHM(hm: string, mode: TimeFormat = "12h"): string {
-  const [h, m] = hm.split(":").map((v) => parseInt(v, 10));
-  if (Number.isNaN(h) || Number.isNaN(m)) return hm;
-  return fmtHourMinute(h, m, mode);
+  const t = parseHM(hm);
+  return t ? fmtHourMinute(t.h, t.m, mode) : hm;
 }
 
 /** Formats a Date (or ISO string) as a wall-clock time per the requested format. */

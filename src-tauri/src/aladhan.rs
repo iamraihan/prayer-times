@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use chrono::{Datelike, NaiveDate, NaiveTime};
 use serde::{Deserialize, Serialize};
 
-use crate::models::Prayer;
+use crate::models::{AsrSchool, Prayer};
 
 pub const BASE: &str = "https://api.aladhan.com/v1";
 
@@ -125,7 +125,7 @@ pub struct FetchParams<'a> {
     /// ISO alpha-2 country code
     pub country: &'a str,
     pub method: u8,
-    pub school: u8,
+    pub school: AsrSchool,
 }
 
 /// "17:46 (+06)" / "17:46 (EET)" / "17:46" → NaiveTime
@@ -261,7 +261,7 @@ pub fn fetch_day_by_city(
 fn month_cache_path(
     dir: &Path,
     method: u8,
-    school: u8,
+    school: AsrSchool,
     year: i32,
     month: u32,
 ) -> PathBuf {
@@ -273,7 +273,7 @@ fn month_cache_path(
 pub fn load_month(
     dir: &Path,
     method: u8,
-    school: u8,
+    school: AsrSchool,
     year: i32,
     month: u32,
 ) -> Option<MonthCache> {
@@ -284,12 +284,60 @@ pub fn load_month(
     Some(cache)
 }
 
-pub fn save_month(dir: &Path, cache: &MonthCache, method: u8, school: u8) {
+pub fn save_month(dir: &Path, cache: &MonthCache, method: u8, school: AsrSchool) {
     let path = month_cache_path(dir, method, school, cache.year, cache.month);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(json) = serde_json::to_string(cache) {
         let _ = std::fs::write(path, json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_hm_strips_zone_suffix() {
+        let expected = NaiveTime::from_hms_opt(17, 46, 0);
+        assert_eq!(parse_hm("17:46"), expected);
+        assert_eq!(parse_hm("17:46 (+06)"), expected);
+        assert_eq!(parse_hm(" 17:46 (EET) "), expected);
+        assert_eq!(parse_hm(""), None);
+        assert_eq!(parse_hm("5pm"), None);
+    }
+
+    const RAW_DAY: &str = r#"{
+        "timings": {
+            "Fajr": "04:58 (+06)", "Sunrise": "06:14 (+06)", "Dhuhr": "11:51 (+06)",
+            "Asr": "15:38 (+06)", "Sunset": "17:22 (+06)", "Maghrib": "17:22 (+06)",
+            "Isha": "18:39 (+06)", "Imsak": "04:48 (+06)", "Midnight": "23:51 (+06)"
+        },
+        "date": {
+            "readable": "09 Nov 2026",
+            "gregorian": { "date": "09-11-2026" },
+            "hijri": { "day": "29", "month": { "en": "Jumādá al-ūlá" }, "year": "1448" }
+        },
+        "meta": { "timezone": "Asia/Dhaka" }
+    }"#;
+
+    #[test]
+    fn parses_an_api_day() {
+        let raw: RawDay = serde_json::from_str(RAW_DAY).unwrap();
+        assert_eq!(raw.meta.as_ref().unwrap().timezone, "Asia/Dhaka");
+        let day = to_day(&raw).unwrap();
+        assert_eq!(day.date, NaiveDate::from_ymd_opt(2026, 11, 9).unwrap());
+        assert_eq!(day.hijri, "29 Jumādá al-ūlá 1448");
+        assert_eq!(day.times.len(), 5);
+        assert_eq!(day.times[&Prayer::Isha], NaiveTime::from_hms_opt(18, 39, 0).unwrap());
+        assert_eq!(day.midnight, NaiveTime::from_hms_opt(23, 51, 0).unwrap());
+    }
+
+    #[test]
+    fn day_without_sunrise_is_rejected() {
+        let mut raw: RawDay = serde_json::from_str(RAW_DAY).unwrap();
+        raw.timings.sunrise = None;
+        assert!(to_day(&raw).is_none());
     }
 }

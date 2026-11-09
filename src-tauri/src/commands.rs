@@ -10,7 +10,7 @@ use tauri::{AppHandle, State};
 use crate::aladhan;
 use crate::engine::{self, Engine};
 use crate::models::{
-    AppStateDto, Location, LocationPreviewDto, Prayer, PreviewRequest, Settings,
+    AppStateDto, AsrSchool, Location, LocationPreviewDto, Prayer, PreviewRequest, Settings,
 };
 use crate::timeutil;
 use crate::SharedEngine;
@@ -66,7 +66,7 @@ pub async fn preview_location(req: PreviewRequest) -> Result<LocationPreviewDto,
         };
         Ok(LocationPreviewDto {
             location,
-            day: engine::day_timings_dto(&day, false),
+            day: engine::day_timings_dto(&day, Some(tz), false),
         })
     })
     .await
@@ -78,7 +78,7 @@ pub fn save_location(
     shared: State<'_, SharedEngine>,
     location: Location,
     method: u8,
-    school: u8,
+    school: AsrSchool,
 ) -> Result<AppStateDto, String> {
     let dto = with_engine(&shared, |engine| {
         engine.save_location(location, method, school);
