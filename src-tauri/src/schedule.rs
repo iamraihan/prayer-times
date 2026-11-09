@@ -208,6 +208,32 @@ pub fn compute(
     events
 }
 
+/// Prayers whose window closed less than `GRACE_SECS` ago and that are
+/// neither Done nor already logged: the app watched them close, so they are
+/// recorded as missed. Older closes (app closed, machine asleep) stay "no
+/// record". Pass the previous Prayer Day's windows too: its Isha can close
+/// just after the engine has rolled to the new day.
+pub fn missed_now(
+    windows: &[PrayerWindow],
+    now: DateTime<Tz>,
+    is_done: impl Fn(Prayer) -> bool,
+    already_logged: impl Fn(Prayer) -> bool,
+) -> Vec<Prayer> {
+    windows
+        .iter()
+        .filter(|w| w.end <= now && now - w.end <= Duration::seconds(GRACE_SECS))
+        .filter(|w| !is_done(w.prayer) && !already_logged(w.prayer))
+        .map(|w| w.prayer)
+        .collect()
+}
+
+/// Whether a prayer can be marked Done at `now`: not before its window
+/// opens (it can't have been prayed yet). After the window it still can, for
+/// a late prayer. An unknown window doesn't block.
+pub fn can_mark_done(window: Option<(DateTime<Tz>, DateTime<Tz>)>, now: DateTime<Tz>) -> bool {
+    window.is_none_or(|(start, _)| start <= now)
+}
+
 /// Unique id for an event within its Prayer Day, used to track "already fired".
 pub fn event_id(date: NaiveDate, prayer: Prayer, kind: EventKind) -> String {
     format!("{date}|{}|{}", prayer.id(), kind.id())
@@ -698,6 +724,74 @@ mod tests {
         let now = at(DHAKA, "2026-11-09", "06:30");
         let (w, _) = featured(&ws, now, |_| false).unwrap();
         assert_eq!(w.prayer, Prayer::Dhuhr);
+    }
+
+    // -- can_mark_done -----------------------------------------------------
+
+    #[test]
+    fn cannot_mark_done_before_the_window_opens() {
+        let day = dhaka_day("2026-11-10");
+        let dhuhr = window(Prayer::Dhuhr, &day, DHAKA);
+        assert!(!can_mark_done(dhuhr, at(DHAKA, "2026-11-10", "00:57")));
+        assert!(!can_mark_done(dhuhr, at(DHAKA, "2026-11-10", "11:49")));
+        assert!(can_mark_done(dhuhr, at(DHAKA, "2026-11-10", "11:50")));
+        // After the window closed it can still be marked (prayed late).
+        assert!(can_mark_done(dhuhr, at(DHAKA, "2026-11-10", "16:00")));
+    }
+
+    #[test]
+    fn unknown_window_does_not_block_marking_done() {
+        assert!(can_mark_done(None, at(DHAKA, "2026-11-10", "00:57")));
+    }
+
+    // -- missed_now --------------------------------------------------------
+
+    #[test]
+    fn missed_when_window_closes_while_running() {
+        let day = dhaka_day("2026-11-09");
+        let ws = windows(&day, DHAKA, &Settings::default());
+        let now = at(DHAKA, "2026-11-09", "15:45");
+        assert_eq!(missed_now(&ws, now, |_| false, |_| false), vec![Prayer::Dhuhr]);
+    }
+
+    #[test]
+    fn not_missed_after_grace() {
+        // Dhuhr closed 15:40; 11 minutes later the app wasn't watching.
+        let day = dhaka_day("2026-11-09");
+        let ws = windows(&day, DHAKA, &Settings::default());
+        let now = at(DHAKA, "2026-11-09", "15:51");
+        assert!(missed_now(&ws, now, |_| false, |_| false).is_empty());
+    }
+
+    #[test]
+    fn done_or_logged_not_missed() {
+        let day = dhaka_day("2026-11-09");
+        let ws = windows(&day, DHAKA, &Settings::default());
+        let now = at(DHAKA, "2026-11-09", "15:45");
+        assert!(missed_now(&ws, now, |p| p == Prayer::Dhuhr, |_| false).is_empty());
+        assert!(missed_now(&ws, now, |_| false, |p| p == Prayer::Dhuhr).is_empty());
+    }
+
+    #[test]
+    fn missed_isha_after_midnight_belongs_to_previous_prayer_day() {
+        // London: Isha of 06-20 closes at 01:05 on 06-21. Three minutes
+        // later the engine has already rolled to the 06-21 Prayer Day, so
+        // the previous day's windows must be checked too.
+        let y = london_summer_day("2026-06-20");
+        let now = at(LONDON, "2026-06-21", "01:08");
+        assert_eq!(prayer_day(now, LONDON, Some(&y)), d("2026-06-21"));
+        let ws = windows(&y, LONDON, &Settings::default());
+        assert_eq!(missed_now(&ws, now, |_| false, |_| false), vec![Prayer::Isha]);
+    }
+
+    #[test]
+    fn dst_day_windows_resolve_and_report_once() {
+        // London springs forward on 2026-03-29; Fajr 02:45 → sunrise 04:45.
+        let day = london_summer_day("2026-03-29");
+        let ws = windows(&day, LONDON, &Settings::default());
+        let now = at(LONDON, "2026-03-29", "04:48");
+        assert_eq!(missed_now(&ws, now, |_| false, |_| false), vec![Prayer::Fajr]);
+        assert!(missed_now(&ws, now, |_| false, |p| p == Prayer::Fajr).is_empty());
     }
 
     #[test]

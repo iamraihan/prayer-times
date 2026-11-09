@@ -92,6 +92,26 @@ From the popup, the in-app banner, or the tray menu you can:
 A prayer window closes at: Fajr → sunrise, Dhuhr → Asr, Asr → Maghrib,
 Maghrib → Isha, Isha → midnight.
 
+## History and backup
+
+The **History** tab shows a month of Prayer Days: one mark per prayer (filled = done, hollow ring = missed, dash = no
+record, readable without colour), how many days in a row every recorded
+prayer was done, and this month's totals. Click a day to fix it.
+
+- A prayer can be marked **done** only once its time has started (from the
+  Today list, the popup, the tray or History); before that it couldn't have
+  been prayed yet.
+- A prayer is **missed** only if its time ended while the app was running.
+  If the app was closed or the computer asleep, that prayer shows **no
+  record**, never missed.
+- History lives in `history.db` (SQLite) in the app's data folder.
+- **Settings → General → Backup**: *Export…* writes your history and settings
+  to one JSON file; *Import…* on another computer merges the history (nothing
+  is deleted; done beats missed) and can also apply the settings. The custom
+  alarm tone file isn't included. The same buttons sit at the bottom of the
+  History tab; importing there brings in history only and never changes
+  settings.
+
 ## Tech stack
 
 - **Frontend**: React 19 + TypeScript + Vite + Tailwind CSS v4, zustand store,

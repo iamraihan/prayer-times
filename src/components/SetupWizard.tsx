@@ -14,6 +14,7 @@ import { PRAYERS, PRAYER_LABELS } from "../lib/types";
 import { PrayerIcon } from "./PrayerIcon";
 import { fmtHM, fmtLongDate } from "../lib/time";
 import { cn } from "../lib/cn";
+import { friendlyError as sharedFriendlyError } from "../lib/errors";
 
 export interface SetupWizardProps {
   /** Called after the location was saved successfully. */
@@ -134,10 +135,14 @@ export function SetupWizard({ onFinished, onCancel }: SetupWizardProps) {
           {step === 0 && (
             <div className="fade-in space-y-4">
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-300">
+                <p id="setup-country-label" className="mb-1.5 text-[13px] font-medium text-slate-300">
                   Country
-                </label>
-                <CountryPicker value={country} onChange={handleCountryChange} />
+                </p>
+                <CountryPicker
+                  value={country}
+                  onChange={handleCountryChange}
+                  labelId="setup-country-label"
+                />
               </div>
               <CityPicker
                 countryCode={country?.code ?? null}
@@ -145,7 +150,7 @@ export function SetupWizard({ onFinished, onCancel }: SetupWizardProps) {
                 value={city}
                 onChange={setCity}
               />
-              <p className="text-xs leading-relaxed text-slate-500">
+              <p className="text-[13px] leading-relaxed text-slate-500">
                 Pick your city from the list so times are calculated for its
                 exact position. If your town isn't listed, pick the nearest
                 one.
@@ -175,7 +180,7 @@ export function SetupWizard({ onFinished, onCancel }: SetupWizardProps) {
                 <option value={0}>Standard (Shafi, Maliki, Hanbali)</option>
                 <option value={1}>Hanafi</option>
               </SelectField>
-              <p className="text-xs leading-relaxed text-slate-500">
+              <p className="text-[13px] leading-relaxed text-slate-500">
                 Not sure? Keep the default — it was pre-selected for your
                 country.
               </p>
@@ -198,7 +203,7 @@ export function SetupWizard({ onFinished, onCancel }: SetupWizardProps) {
                   <p className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">
                     {friendlyError(error)}
                   </p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-[13px] text-slate-500">
                     Go back and check the city spelling, or try the nearest
                     larger city.
                   </p>
@@ -300,5 +305,5 @@ function friendlyError(raw: string): string {
   if (/network|timeout|dns|connect/i.test(raw)) {
     return "Network error — please check your internet connection and try again.";
   }
-  return raw;
+  return sharedFriendlyError(raw);
 }

@@ -19,15 +19,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration as StdDuration, Instant};
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Days, Duration, Months, NaiveDate, Utc};
 use chrono_tz::Tz;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::aladhan::{self, DayTimings};
 use crate::models::{
     ActiveAlarmDto, AlarmMessageDto, AppStateDto, AsrSchool, DayTimingsDto, Location, NextPrayerDto,
-    Prayer, PrayerTimeDto, Settings,
+    Prayer, PrayerTimeDto, Settings, HistoryMonthDto, HistorySource, HistoryStatus,
 };
+use crate::backup::BackupFile;
+use crate::history::{self, HistoryStore};
 use crate::schedule::{self, Due, EventKind};
 use crate::sound::Sound;
 use crate::{alarm, runtime, settings as settings_io, timeutil, tray};
@@ -127,6 +129,12 @@ pub struct Engine {
     sound: Sound,
     dirty: bool,
 
+    /// `None` when `history.db` couldn't be opened; alarms work regardless.
+    history: Option<HistoryStore>,
+    history_error: Option<String>,
+    /// Prayers already written as missed, so a tick doesn't rewrite them.
+    history_logged: HashSet<(NaiveDate, Prayer)>,
+
     tray_l1: String,
     tray_l2: String,
     tray_tooltip: String,
@@ -167,6 +175,14 @@ impl Engine {
             .filter(|path| path.is_file());
         sound.load(custom_tone);
 
+        let (history, history_error) = match HistoryStore::open(&cache_dir.join("history.db")) {
+            Ok(store) => (Some(store), None),
+            Err(e) => {
+                eprintln!("prayer history unavailable: {e}");
+                (None, Some(e))
+            }
+        };
+
         Ok(Engine {
             app,
             client,
@@ -182,6 +198,9 @@ impl Engine {
             last_error: None,
             sound,
             dirty: false,
+            history,
+            history_error,
+            history_logged: HashSet::new(),
             tray_l1: String::new(),
             tray_l2: String::new(),
             tray_tooltip: String::new(),
@@ -253,7 +272,26 @@ impl Engine {
         self.dirty = true;
     }
 
-    pub fn set_prayer_done(&mut self, prayer: Prayer, done: bool) {
+    /// Marks or unmarks `prayer` for the current Prayer Day. Marking is
+    /// refused before the prayer's window opens.
+    pub fn set_prayer_done(&mut self, prayer: Prayer, done: bool) -> Result<(), String> {
+        if done && !self.done.contains_key(&prayer) {
+            let (window, now) = self.today_window(prayer);
+            if let Some(now) = now {
+                if !schedule::can_mark_done(window, now) {
+                    return Err(format!("{} hasn't started yet", prayer.title()));
+                }
+            }
+        }
+        if let Some(day) = self.day {
+            let at = Utc::now();
+            let (status, done_at) = if done {
+                (Some(HistoryStatus::Done), Some(self.done.get(&prayer).copied().unwrap_or(at)))
+            } else {
+                (None, None)
+            };
+            self.with_history(|h| h.set(day, prayer, status, done_at, HistorySource::App));
+        }
         if done {
             self.done.insert(prayer, Utc::now());
             self.snoozes.remove(&prayer);
@@ -264,6 +302,151 @@ impl Engine {
             self.done.remove(&prayer);
         }
         self.dirty = true;
+        Ok(())
+    }
+
+    /// Runs `f` on the history store. Errors are logged and kept for the
+    /// History tab; they never interrupt alarms.
+    fn with_history<T>(&mut self, f: impl FnOnce(&HistoryStore) -> Result<T, String>) -> Option<T> {
+        let result = f(self.history.as_ref()?);
+        track_history(&mut self.history_error, result)
+    }
+
+    /// The History tab's month: statuses per day, streak, monthly totals.
+    pub fn history_month(&mut self, year: i32, month: u32) -> HistoryMonthDto {
+        let today = self.current_prayer_day();
+        let (first, last) = month_bounds(year, month).unwrap_or((today, today));
+        let entries = self.with_history(|h| h.range(first, last)).unwrap_or_default();
+        // A streak longer than a year is shown as a year.
+        let since = today.checked_sub_days(Days::new(366)).unwrap_or(today);
+        let recent = self.with_history(|h| h.range(since, today)).unwrap_or_default();
+        HistoryMonthDto {
+            year,
+            month,
+            today: today.to_string(),
+            days: history::month_days(year, month, &entries, today),
+            streak: history::streak(&history::by_day(&recent), today),
+            totals: history::totals(&history::by_day(&entries)),
+            error: self.history_error.clone(),
+        }
+    }
+
+    /// An edit from the History tab. Today's prayers go through the normal
+    /// Done path so alarms follow; past days are written directly.
+    pub fn set_history_entry(
+        &mut self,
+        day: NaiveDate,
+        prayer: Prayer,
+        status: Option<HistoryStatus>,
+    ) -> Result<(), String> {
+        let today = self.current_prayer_day();
+        history::edit_allowed(day, status, today, self.window_state(prayer))?;
+        if day == today {
+            match status {
+                Some(HistoryStatus::Done) => self.set_prayer_done(prayer, true)?,
+                None => self.set_prayer_done(prayer, false)?,
+                Some(HistoryStatus::Missed) => {
+                    self.set_prayer_done(prayer, false)?;
+                    self.history_logged.insert((day, prayer));
+                    self.store_set(day, prayer, status)?;
+                }
+            }
+            return Ok(());
+        }
+        self.store_set(day, prayer, status)
+    }
+
+    /// The backup file's text: current settings plus the whole history.
+    pub fn export_backup(&mut self) -> Result<String, String> {
+        let store = self
+            .history
+            .as_ref()
+            .ok_or_else(|| self.history_error.clone().unwrap_or_else(|| "History is unavailable".into()))?;
+        let history = store.all()?;
+        Ok(crate::backup::to_json(&self.settings, history, Utc::now()))
+    }
+
+    /// Merges a backup's history and, when asked, applies its settings (the
+    /// device keeps its own alarm tone; the tone file isn't in backups).
+    pub fn import_backup(&mut self, file: BackupFile, include_settings: bool) -> Result<(), String> {
+        if include_settings {
+            if let Some(warning) = file.settings.location.as_ref().and_then(location_warning) {
+                return Err(warning);
+            }
+        }
+        let store = self
+            .history
+            .as_ref()
+            .ok_or_else(|| self.history_error.clone().unwrap_or_else(|| "History is unavailable".into()))?;
+        store.merge(&file.history)?;
+        if include_settings {
+            let settings = crate::backup::settings_to_apply(&self.settings, file.settings);
+            self.apply_settings(settings)?;
+        }
+        // Imported Done marks for the current Prayer Day silence its alarms.
+        if let Some(day) = self.day {
+            if let Some(done) = self.with_history(|h| h.done_on(day)) {
+                for (prayer, at) in done {
+                    self.done.entry(prayer).or_insert(at);
+                }
+            }
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn store_set(&mut self, day: NaiveDate, prayer: Prayer, status: Option<HistoryStatus>) -> Result<(), String> {
+        let store = self.history.as_ref().ok_or_else(|| {
+            self.history_error.clone().unwrap_or_else(|| "History is unavailable".into())
+        })?;
+        store.set(day, prayer, status, None, HistorySource::Edited)
+    }
+
+    /// The Prayer Day in effect now (location time), or the location's
+    /// calendar date before the first tick.
+    fn current_prayer_day(&self) -> NaiveDate {
+        if let Some(day) = self.day {
+            return day;
+        }
+        let tz = self
+            .settings
+            .location
+            .as_ref()
+            .and_then(|l| timeutil::parse_tz(&l.timezone));
+        match tz {
+            Some(tz) => Utc::now().with_timezone(&tz).date_naive(),
+            None => Utc::now().date_naive(),
+        }
+    }
+
+    /// `prayer`'s window in the current Prayer Day and the location's "now"
+    /// (`None`s while there's no location or timetable yet).
+    fn today_window(&self, prayer: Prayer) -> (Option<(DateTime<Tz>, DateTime<Tz>)>, Option<DateTime<Tz>>) {
+        let Some(tz) = self
+            .settings
+            .location
+            .as_ref()
+            .and_then(|l| timeutil::parse_tz(&l.timezone))
+        else {
+            return (None, None);
+        };
+        let now = Utc::now().with_timezone(&tz);
+        let window = self
+            .day
+            .and_then(|d| self.day_timings(d))
+            .and_then(|day| schedule::window(prayer, &day, tz));
+        (window, Some(now))
+    }
+
+    fn window_state(&self, prayer: Prayer) -> history::WindowState {
+        match self.today_window(prayer) {
+            (Some((start, end)), Some(now)) => history::WindowState {
+                started: start <= now,
+                closed: end <= now,
+            },
+            // Unknown: don't block marking done, don't allow "missed".
+            _ => history::WindowState { started: true, closed: false },
+        }
     }
 
     fn showing_preview(&self) -> bool {
@@ -307,7 +490,9 @@ impl Engine {
         }
         let prayer = self.active_alarm.as_ref().map(|a| a.prayer);
         if let Some(prayer) = prayer {
-            self.set_prayer_done(prayer, true);
+            // Refused only before the window opens, where the popup offers
+            // "Got it" instead; the alarm closes either way.
+            let _ = self.set_prayer_done(prayer, true);
         }
         self.clear_alarm();
     }
@@ -516,6 +701,12 @@ impl Engine {
             self.fired.clear();
             self.snoozes.clear();
             self.done.clear();
+            // Marks already recorded for this Prayer Day (after a location or
+            // method change resets the schedule).
+            if let Some(done) = self.with_history(|h| h.done_on(today)) {
+                self.done = done;
+            }
+            self.history_logged.retain(|(d, _)| today.pred_opt() <= Some(*d));
             self.clear_alarm();
             self.dirty = true;
         }
@@ -585,6 +776,34 @@ impl Engine {
                 }
                 Due::Wait => {}
             }
+        }
+
+        // History: windows that closed while the app watched become missed.
+        // Yesterday's too: its Isha can close just after the rollover.
+        let mut to_log: Vec<(NaiveDate, Prayer)> = schedule::missed_now(
+            &windows,
+            now,
+            |p| self.is_done(p),
+            |p| self.history_logged.contains(&(today, p)),
+        )
+        .into_iter()
+        .map(|p| (today, p))
+        .collect();
+        if let (Some(y), Some(ydate)) = (yesterday.as_ref(), today.pred_opt()) {
+            let ywindows = schedule::windows(y, tz, &self.settings);
+            // Yesterday's Done marks live in the database; record_missed
+            // never overwrites them.
+            to_log.extend(
+                schedule::missed_now(&ywindows, now, |_| false, |p| {
+                    self.history_logged.contains(&(ydate, p))
+                })
+                .into_iter()
+                .map(|p| (ydate, p)),
+            );
+        }
+        for (d, p) in to_log {
+            self.history_logged.insert((d, p));
+            self.with_history(|h| h.record_missed(d, p));
         }
 
         // Auto-stop a long unanswered alarm (sound/popup; done still possible
@@ -821,7 +1040,8 @@ impl Engine {
                     second,
                     format!("Prayer Times — {}", next.prayer.title()),
                     format!("✓ Mark {} done", next.prayer.title()),
-                    true,
+                    // Only once it has started.
+                    next.is_current,
                 )
             } else {
                 (
@@ -982,9 +1202,33 @@ pub fn tray_mark_done(app: &AppHandle) {
         return;
     }
     if let Some(prayer) = engine.next_or_current_prayer() {
-        engine.set_prayer_done(prayer, true);
+        // Refused for a prayer that hasn't started; the item is disabled then.
+        let _ = engine.set_prayer_done(prayer, true);
         engine.tick();
     }
+}
+
+/// Keeps `error` to the latest history outcome: a failure is logged and
+/// remembered, a later success clears it.
+fn track_history<T>(error: &mut Option<String>, result: Result<T, String>) -> Option<T> {
+    match result {
+        Ok(v) => {
+            *error = None;
+            Some(v)
+        }
+        Err(e) => {
+            eprintln!("prayer history: {e}");
+            *error = Some(e);
+            None
+        }
+    }
+}
+
+/// First and last day of a month, `None` for an invalid month.
+fn month_bounds(year: i32, month: u32) -> Option<(NaiveDate, NaiveDate)> {
+    let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+    let last = first.checked_add_months(Months::new(1))?.pred_opt()?;
+    Some((first, last))
 }
 
 /// Wakes the engine thread so planned fetches/ticks run immediately
@@ -1047,6 +1291,15 @@ pub fn run_loop(app: AppHandle, wake: Arc<(Mutex<bool>, Condvar)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_later_success_clears_the_history_error() {
+        let mut error = None;
+        assert_eq!(track_history::<u8>(&mut error, Err("busy".into())), None);
+        assert_eq!(error.as_deref(), Some("busy"));
+        assert_eq!(track_history(&mut error, Ok(7)), Some(7));
+        assert_eq!(error, None);
+    }
 
     #[test]
     fn preview_ids_never_look_like_real_events() {

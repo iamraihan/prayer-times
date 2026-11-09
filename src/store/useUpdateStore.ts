@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { friendlyError } from "../lib/errors";
 
 export const RELEASES_URL = "https://github.com/iamraihan/prayer-times/releases/latest";
 
@@ -79,7 +80,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       }
     } catch (e) {
       // Startup checks stay quiet — no error UI without a user action.
-      set(silent ? { phase: "idle" } : { phase: "error", error: String(e) });
+      set(silent ? { phase: "idle" } : { phase: "error", error: friendlyError(e) });
     }
   },
 
@@ -102,7 +103,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       });
       await relaunch();
     } catch (e) {
-      set({ phase: "error", error: String(e) });
+      set({ phase: "error", error: friendlyError(e) });
     }
   },
 

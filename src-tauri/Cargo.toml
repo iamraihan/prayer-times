@@ -37,6 +37,7 @@ reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
 ] }
 rodio = { version = "0.20", features = ["wav", "mp3", "vorbis", "flac"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 
 [lints.rust]
 unsafe_code = "forbid"

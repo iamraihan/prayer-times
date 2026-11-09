@@ -4,6 +4,7 @@ import { AlarmActions, alarmBeforeStart, countsToPrayer, plainTitle } from "../c
 import { PrayerIcon } from "../components/PrayerIcon";
 import { startClock, useAppStore } from "../store/useAppStore";
 import { PRAYER_LABELS } from "../lib/types";
+import { alarmDismiss } from "../lib/actions";
 import { countdown } from "../lib/time";
 
 /**
@@ -25,6 +26,18 @@ export function AlarmWindow() {
     startClock();
     void init();
   }, [init]);
+
+  // Esc dismisses the popup's alarm (later reminders still fire).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && useAppStore.getState().state?.activeAlarm) {
+        e.preventDefault();
+        void alarmDismiss().catch(() => {});
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   if (!alarm) {
     // Window is hidden by the backend when no alarm is active.
@@ -59,6 +72,7 @@ export function AlarmWindow() {
         <AlarmActions
           done={done}
           kind={alarm.kind}
+          focusPrimary
           beforeStart={alarmBeforeStart(state, alarm, now)}
         />
       </div>

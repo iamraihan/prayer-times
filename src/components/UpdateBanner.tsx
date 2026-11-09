@@ -27,7 +27,7 @@ export function UpdateBanner() {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-emerald-900/50 bg-emerald-950/40 px-5 py-2 text-sm">
       <p className="flex items-center gap-2 text-emerald-200">
-        <Download className="h-4 w-4 shrink-0" />
+        <Download className="h-4 w-4 shrink-0" aria-hidden />
         {phase === "downloading"
           ? `Updating… ${pct !== null ? `${pct}% — ` : ""}the app restarts when ready`
           : `Version ${newVersion} is available`}

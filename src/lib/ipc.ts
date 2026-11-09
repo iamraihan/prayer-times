@@ -12,6 +12,9 @@ import type {
   AlarmKind,
   AppState,
   AsrSchool,
+  BackupPreview,
+  HistoryMonth,
+  HistoryStatus,
   CityMatch,
   Location,
   LocationPreview,
@@ -31,6 +34,11 @@ interface Commands {
   save_location: [{ location: Location; method: number; school: AsrSchool }, AppState];
   update_settings: [{ settings: Settings }, AppState];
   set_prayer_done: [{ prayer: Prayer; done: boolean }, AppState];
+  get_history_month: [{ year: number; month: number }, HistoryMonth];
+  set_history_entry: [{ day: string; prayer: Prayer; status: HistoryStatus | null }, HistoryMonth];
+  export_backup: [{ path: string }, void];
+  preview_backup: [{ path: string }, BackupPreview];
+  import_backup: [{ path: string; includeSettings: boolean }, AppState];
   alarm_done: [NoArgs, AppState];
   alarm_snooze: [{ minutes: number }, AppState];
   alarm_dismiss: [NoArgs, AppState];
@@ -69,6 +77,18 @@ export const api = {
   alarmSnooze: (minutes: number) => call("alarm_snooze", { minutes }),
 
   alarmDismiss: () => call("alarm_dismiss", none),
+
+  getHistoryMonth: (year: number, month: number) => call("get_history_month", { year, month }),
+
+  setHistoryEntry: (day: string, prayer: Prayer, status: HistoryStatus | null) =>
+    call("set_history_entry", { day, prayer, status }),
+
+  exportBackup: (path: string) => call("export_backup", { path }),
+
+  previewBackup: (path: string) => call("preview_backup", { path }),
+
+  importBackup: (path: string, includeSettings: boolean) =>
+    call("import_backup", { path, includeSettings }),
 
   previewAlarm: (kind: AlarmKind) => call("preview_alarm", { kind }),
 

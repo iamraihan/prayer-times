@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use ts_rs::TS;
@@ -42,6 +43,11 @@ impl Prayer {
             Prayer::Maghrib => "maghrib",
             Prayer::Isha => "isha",
         }
+    }
+
+    /// Inverse of [`Prayer::id`].
+    pub fn from_id(id: &str) -> Option<Prayer> {
+        Prayer::ALL.into_iter().find(|p| p.id() == id)
     }
 
     pub fn title(self) -> &'static str {
@@ -315,6 +321,172 @@ pub fn settings_from_json(text: &str) -> Option<Settings> {
 
 // ---------------------------------------------------------------------------
 // DTOs pushed to the frontend
+// ---------------------------------------------------------------------------
+
+/// A recorded outcome for one prayer on one Prayer Day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub enum HistoryStatus {
+    Done,
+    Missed,
+}
+
+impl HistoryStatus {
+    pub fn id(self) -> &'static str {
+        match self {
+            HistoryStatus::Done => "done",
+            HistoryStatus::Missed => "missed",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<HistoryStatus> {
+        [HistoryStatus::Done, HistoryStatus::Missed]
+            .into_iter()
+            .find(|s| s.id() == id)
+    }
+}
+
+/// Who wrote a history row (stored, not sent to the UI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistorySource {
+    App,
+    Edited,
+    Imported,
+}
+
+impl HistorySource {
+    pub fn id(self) -> &'static str {
+        match self {
+            HistorySource::App => "app",
+            HistorySource::Edited => "edited",
+            HistorySource::Imported => "imported",
+        }
+    }
+}
+
+/// One prayer's recorded status per field; `None` = no record.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct DayStatusesDto {
+    pub fajr: Option<HistoryStatus>,
+    pub dhuhr: Option<HistoryStatus>,
+    pub asr: Option<HistoryStatus>,
+    pub maghrib: Option<HistoryStatus>,
+    pub isha: Option<HistoryStatus>,
+}
+
+impl DayStatusesDto {
+    pub fn get(&self, prayer: Prayer) -> Option<HistoryStatus> {
+        match prayer {
+            Prayer::Fajr => self.fajr,
+            Prayer::Dhuhr => self.dhuhr,
+            Prayer::Asr => self.asr,
+            Prayer::Maghrib => self.maghrib,
+            Prayer::Isha => self.isha,
+        }
+    }
+
+    pub fn set(&mut self, prayer: Prayer, status: Option<HistoryStatus>) {
+        let slot = match prayer {
+            Prayer::Fajr => &mut self.fajr,
+            Prayer::Dhuhr => &mut self.dhuhr,
+            Prayer::Asr => &mut self.asr,
+            Prayer::Maghrib => &mut self.maghrib,
+            Prayer::Isha => &mut self.isha,
+        };
+        *slot = status;
+    }
+}
+
+/// Done count out of recorded days, for one prayer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct PrayerTotalDto {
+    pub done: u32,
+    pub recorded: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct PrayerTotalsDto {
+    pub fajr: PrayerTotalDto,
+    pub dhuhr: PrayerTotalDto,
+    pub asr: PrayerTotalDto,
+    pub maghrib: PrayerTotalDto,
+    pub isha: PrayerTotalDto,
+}
+
+impl PrayerTotalsDto {
+    pub fn get_mut(&mut self, prayer: Prayer) -> &mut PrayerTotalDto {
+        match prayer {
+            Prayer::Fajr => &mut self.fajr,
+            Prayer::Dhuhr => &mut self.dhuhr,
+            Prayer::Asr => &mut self.asr,
+            Prayer::Maghrib => &mut self.maghrib,
+            Prayer::Isha => &mut self.isha,
+        }
+    }
+}
+
+/// One calendar day in the History tab.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct HistoryDayDto {
+    /// `YYYY-MM-DD`.
+    pub day: String,
+    pub prayers: DayStatusesDto,
+    /// False for days after the current Prayer Day.
+    pub editable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct HistoryMonthDto {
+    pub year: i32,
+    pub month: u32,
+    /// The current Prayer Day, `YYYY-MM-DD`.
+    pub today: String,
+    /// One entry per calendar day of the month.
+    pub days: Vec<HistoryDayDto>,
+    pub streak: u32,
+    /// For this month.
+    pub totals: PrayerTotalsDto,
+    /// Set when the history database can't be read or written.
+    pub error: Option<String>,
+}
+
+/// What an import would bring, shown before the user confirms.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct BackupPreviewDto {
+    pub entries: u32,
+    pub days: u32,
+    pub first_day: Option<String>,
+    pub last_day: Option<String>,
+    /// City of the backed-up location.
+    pub location: Option<String>,
+    /// The backup refers to a custom alarm tone, which isn't included.
+    pub has_custom_tone: bool,
+}
+
+/// One history row: also the shape of a backup file's `history` entries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    /// Prayer Day, `YYYY-MM-DD` (location date).
+    pub day: NaiveDate,
+    pub prayer: Prayer,
+    pub status: HistoryStatus,
+    pub done_at: Option<DateTime<Utc>>,
+}
+
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
