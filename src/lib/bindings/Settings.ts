@@ -18,4 +18,16 @@ method: number, school: AsrSchool, timeFormat: TimeFormat, notificationsEnabled:
  * File name of a custom alarm tone inside the app config dir
  * (e.g. "alarm-tone.mp3"); `None` = built-in chime.
  */
-alarmSound: string | null, popupEnabled: boolean, preEndWarningEnabled: boolean, preEndWarningMinutes: number, prayerSettings: PrayerSettingsMap, };
+alarmSound: string | null, popupEnabled: boolean, 
+/**
+ * "Get ready": a heads-up `get_ready_minutes` before each prayer starts.
+ */
+getReadyEnabled: boolean, getReadyMinutes: number, 
+/**
+ * "Prayer time": the Main Alarm at each prayer's start.
+ */
+startAlarmEnabled: boolean, 
+/**
+ * "Don't miss it" in the UI.
+ */
+preEndWarningEnabled: boolean, preEndWarningMinutes: number, prayerSettings: PrayerSettingsMap, };

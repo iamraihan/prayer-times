@@ -1,6 +1,6 @@
 import { BellRing } from "lucide-react";
 import { useAppState, useNow } from "../store/useAppStore";
-import { AlarmActions, plainTitle } from "./AlarmActions";
+import { AlarmActions, beforeWindowStart, plainTitle } from "./AlarmActions";
 import { countdown } from "../lib/time";
 
 /** In-app banner shown while an alarm is active (same actions as the popup). */
@@ -11,8 +11,9 @@ export function AlarmBanner() {
   if (!alarm) return null;
 
   const done = state.doneToday[alarm.prayer] === true;
-  const endMs = Date.parse(alarm.endsAt);
-  const endsIn = isNaN(endMs) ? null : countdown(endMs - now);
+  const early = alarm.kind === "getReady";
+  const targetMs = Date.parse(early ? alarm.prayAt : alarm.endsAt);
+  const endsIn = isNaN(targetMs) ? null : countdown(targetMs - now);
 
   return (
     <section
@@ -27,13 +28,13 @@ export function AlarmBanner() {
           <div className="flex flex-wrap items-baseline justify-between gap-x-4">
             <h2 className="font-semibold text-slate-50">{plainTitle(alarm.message.title)}</h2>
             {endsIn && (
-              <span className="tnum text-[13px] text-slate-400">ends in {endsIn}</span>
+              <span className="tnum text-[13px] text-slate-400">{early ? "prayer" : "ends"} in {endsIn}</span>
             )}
           </div>
           <p className="mt-1 text-sm leading-relaxed text-slate-300">{alarm.message.body}</p>
         </div>
       </div>
-      <AlarmActions done={done} />
+      <AlarmActions done={done} beforeStart={beforeWindowStart(state, alarm.prayer, now)} />
     </section>
   );
 }

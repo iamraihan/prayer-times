@@ -3,6 +3,7 @@ import { Check } from "lucide-react";
 import { Button } from "./ui/Button";
 import { alarmDismiss, alarmDone, alarmSnooze } from "../lib/actions";
 import { cn } from "../lib/cn";
+import type { AppState, Prayer } from "../lib/types";
 
 const SNOOZE_PRESETS = [5, 10, 15, 30];
 
@@ -12,9 +13,13 @@ const SNOOZE_PRESETS = [5, 10, 15, 30];
  * remind-me-later (snooze N minutes, with a custom input),
  * or dismiss (stop the sound; later reminders still fire).
  *
+ * Before the prayer has started (a "Get ready" ringing ahead of the window)
+ * it can't be marked done: the primary action is "Got it", which only stops
+ * the alarm. Once the window is open, "Mark as done" is offered as usual.
+ *
  * Shared by the in-app banner and the standalone alarm popup window.
  */
-export function AlarmActions({ done }: { done: boolean }) {
+export function AlarmActions({ done, beforeStart }: { done: boolean; beforeStart: boolean }) {
   const [minutes, setMinutes] = useState(10);
   const [busy, setBusy] = useState(false);
   const customValid = Number.isFinite(minutes) && minutes >= 1 && minutes <= 720;
@@ -32,19 +37,34 @@ export function AlarmActions({ done }: { done: boolean }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="primary"
-          size="lg"
-          className="flex-1"
-          disabled={busy || done}
-          onClick={() => void run(alarmDone)}
-        >
-          <Check className="h-[18px] w-[18px]" aria-hidden />
-          {done ? "Marked as done" : "Mark as done"}
-        </Button>
-        <Button variant="ghost" size="lg" disabled={busy} onClick={() => void run(alarmDismiss)}>
-          Dismiss
-        </Button>
+        {beforeStart ? (
+          <Button
+            variant="primary"
+            size="lg"
+            className="flex-1"
+            disabled={busy}
+            onClick={() => void run(alarmDismiss)}
+          >
+            <Check className="h-[18px] w-[18px]" aria-hidden />
+            Got it
+          </Button>
+        ) : (
+          <>
+            <Button
+              variant="primary"
+              size="lg"
+              className="flex-1"
+              disabled={busy || done}
+              onClick={() => void run(alarmDone)}
+            >
+              <Check className="h-[18px] w-[18px]" aria-hidden />
+              {done ? "Marked as done" : "Mark as done"}
+            </Button>
+            <Button variant="ghost" size="lg" disabled={busy} onClick={() => void run(alarmDismiss)}>
+              Dismiss
+            </Button>
+          </>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -100,6 +120,14 @@ export function AlarmActions({ done }: { done: boolean }) {
       </div>
     </div>
   );
+}
+
+/** Whether `prayer`'s window has not opened yet at `now` (from the
+ * snapshot's RFC3339 start instant). Unknown counts as started. */
+export function beforeWindowStart(state: AppState | null, prayer: Prayer, now: number): boolean {
+  const startAt = state?.today?.timings.find((t) => t.prayer === prayer)?.startAt;
+  const ms = startAt ? Date.parse(startAt) : NaN;
+  return !isNaN(ms) && now < ms;
 }
 
 /** Message titles are built for OS notifications and may lead with an emoji;

@@ -56,7 +56,7 @@ windows are hidden.
 
 ## Event lifecycle (per prayer, per day)
 
-`id = "{date}|{prayer}|{start|reminder|preEnd}"`
+`id = "{date}|{prayer}|{getReady|start|preEnd}"`
 
 - "day" here is the **Prayer Day** (`schedule::prayer_day`): the calendar
   date, except while yesterday's Isha window is still open past midnight.

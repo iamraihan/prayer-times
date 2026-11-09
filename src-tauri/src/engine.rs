@@ -42,8 +42,9 @@ const RETRY_AFTER: StdDuration = StdDuration::from_secs(60);
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum AlarmKind {
+    /// "Get ready": a heads-up before the window opens.
+    GetReady,
     Start,
-    Reminder,
     PreEnd,
     Snooze,
 }
@@ -51,6 +52,7 @@ pub enum AlarmKind {
 impl From<EventKind> for AlarmKind {
     fn from(kind: EventKind) -> Self {
         match kind {
+            EventKind::GetReady => AlarmKind::GetReady,
             EventKind::Start => AlarmKind::Start,
             EventKind::PreEnd => AlarmKind::PreEnd,
         }
@@ -62,6 +64,8 @@ pub struct ActiveAlarmState {
     pub prayer: Prayer,
     pub kind: AlarmKind,
     pub fired_at: DateTime<Utc>,
+    /// The user's prayer time, for a "Get ready" alarm's countdown.
+    pub pray_at: DateTime<Tz>,
     /// Prayer-window end, for the popup's live "ends in" countdown.
     pub ends_at: DateTime<Tz>,
     pub message: AlarmMessageDto,
@@ -341,6 +345,7 @@ impl Engine {
                 prayer: a.prayer,
                 kind: a.kind,
                 started_at: a.fired_at.to_rfc3339(),
+                pray_at: a.pray_at.to_rfc3339(),
                 ends_at: a.ends_at.to_rfc3339(),
                 message: a.message.clone(),
             }),
@@ -497,7 +502,7 @@ impl Engine {
             if !self.is_done(prayer) {
                 if let Some(event) = events.iter().find(|e| e.prayer == prayer) {
                     let id = format!("{}|{}|snooze|{}", today, prayer.id(), encoded_at);
-                    self.fire(prayer, AlarmKind::Snooze, event.start, event.end, now, id);
+                    self.fire(prayer, AlarmKind::Snooze, event.pray_at, event.end, now, id);
                 }
             }
         }
@@ -510,14 +515,8 @@ impl Engine {
             let id = schedule::event_id(today, event.prayer, event.kind);
             match schedule::due(event.at, now, self.fired.contains(&id)) {
                 Due::Fire => {
-                    // A delayed main alarm speaks the "you still have …"
-                    // message, otherwise "it's time to pray".
-                    let kind = if event.kind == EventKind::Start && event.delayed {
-                        AlarmKind::Reminder
-                    } else {
-                        AlarmKind::from(event.kind)
-                    };
-                    self.fire(event.prayer, kind, event.start, event.end, now, id);
+                    let kind = AlarmKind::from(event.kind);
+                    self.fire(event.prayer, kind, event.pray_at, event.end, now, id);
                 }
                 Due::SkipMissed => {
                     // Missed for too long (app closed / asleep): skip silently.
@@ -557,7 +556,7 @@ impl Engine {
         &mut self,
         prayer: Prayer,
         kind: AlarmKind,
-        start: DateTime<Tz>,
+        pray_at: DateTime<Tz>,
         end: DateTime<Tz>,
         now: DateTime<Tz>,
         id: String,
@@ -565,12 +564,13 @@ impl Engine {
         self.fired.insert(id.clone());
         self.dirty = true;
 
-        let message = self.build_message(prayer, kind, start, end, now);
+        let message = self.build_message(prayer, kind, pray_at, end, now);
         self.active_alarm = Some(ActiveAlarmState {
             id,
             prayer,
             kind,
             fired_at: Utc::now(),
+            pray_at,
             ends_at: end,
             message: message.clone(),
         });
@@ -592,7 +592,7 @@ impl Engine {
         &self,
         prayer: Prayer,
         kind: AlarmKind,
-        start: DateTime<Tz>,
+        pray_at: DateTime<Tz>,
         end: DateTime<Tz>,
         now: DateTime<Tz>,
     ) -> AlarmMessageDto {
@@ -600,19 +600,29 @@ impl Engine {
         let fmt = |d: &DateTime<Tz>| alarm::fmt_time(d, mode_24h);
         let left = (end - now).num_minutes().max(0);
         let title = prayer.title();
+        let until = (pray_at - now).num_minutes().max(0);
         match kind {
+            AlarmKind::GetReady => AlarmMessageDto {
+                title: format!("🕌 {title} in {until} minutes"),
+                body: format!(
+                    "{title} at {} — about {until} min from now. Time to get ready.",
+                    fmt(&pray_at)
+                ),
+            },
+            // A snooze taken on a "Get ready" can come due before the
+            // user's prayer time.
+            AlarmKind::Snooze if now < pray_at => AlarmMessageDto {
+                title: format!("🕌 Reminder: {title}"),
+                body: format!(
+                    "{title} at {} — about {until} min from now.",
+                    fmt(&pray_at)
+                ),
+            },
             AlarmKind::Start => AlarmMessageDto {
                 title: format!("🕌 {title} time"),
                 body: format!(
                     "It's time to pray {title} ({}). Its window ends at {} — about {left} min left.",
-                    fmt(&start),
-                    fmt(&end)
-                ),
-            },
-            AlarmKind::Reminder => AlarmMessageDto {
-                title: format!("{title}: {left} minutes left"),
-                body: format!(
-                    "You still have about {left} minutes left to pray {title}. It ends at {}.",
+                    fmt(&pray_at),
                     fmt(&end)
                 ),
             },
@@ -685,13 +695,13 @@ impl Engine {
     fn compute_next(&self, now: DateTime<Tz>, tz: Tz) -> Option<NextInfo> {
         let pday = self.prayer_day(now, tz);
         let day = self.day_timings(pday)?;
-        let events = schedule::compute(&day, tz, &self.settings);
+        let windows = schedule::windows(&day, tz, &self.settings);
 
-        if let Some((event, is_current)) = schedule::featured(&events, now, |p| self.is_done(p)) {
+        if let Some((w, is_current)) = schedule::featured(&windows, now, |p| self.is_done(p)) {
             return Some(NextInfo {
-                prayer: event.prayer,
-                start: event.start,
-                end: event.end,
+                prayer: w.prayer,
+                start: w.start,
+                end: w.end,
                 is_current,
             });
         }

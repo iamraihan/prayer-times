@@ -17,7 +17,9 @@ pub const GRACE_SECS: i64 = 10 * 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventKind {
-    /// The prayer's main alarm.
+    /// "Get ready": a heads-up before the window opens.
+    GetReady,
+    /// The prayer's main alarm, at its start.
     Start,
     /// Final warning before the window closes.
     PreEnd,
@@ -26,26 +28,55 @@ pub enum EventKind {
 impl EventKind {
     pub fn id(self) -> &'static str {
         match self {
+            EventKind::GetReady => "getReady",
             EventKind::Start => "start",
             EventKind::PreEnd => "preEnd",
         }
     }
 }
 
+/// The furthest ahead a "Get ready" alarm may ring.
+pub const MAX_GET_READY_MINUTES: u32 = 60;
+
+/// An enabled prayer's window for one Prayer Day.
+#[derive(Debug, Clone)]
+pub struct PrayerWindow {
+    pub prayer: Prayer,
+    pub start: DateTime<Tz>,
+    pub end: DateTime<Tz>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PlannedEvent {
     pub kind: EventKind,
-    /// True when the main alarm is delayed past the start time
-    /// (reminder_minutes set) — the engine uses the "you still have …"
-    /// message for it.
-    pub delayed: bool,
     pub prayer: Prayer,
     /// When this event fires.
     pub at: DateTime<Tz>,
-    /// Window start (the prayer's own time).
-    pub start: DateTime<Tz>,
     /// Window end (when the prayer's time closes).
     pub end: DateTime<Tz>,
+    /// When the user prays it: the start, or "N min after it starts"
+    /// (see `pray_time`). The Get-Ready and Main Alarms are tied to it.
+    pub pray_at: DateTime<Tz>,
+}
+
+/// Keeps the user's prayer time out of a window's last minutes, so "Don't
+/// miss it" can still come after it.
+pub const PRAY_TIME_END_MARGIN_MINUTES: i64 = 5;
+
+/// When the user prays: `after` minutes past the start, but never inside the
+/// window's last `PRAY_TIME_END_MARGIN_MINUTES` (moved earlier when it would
+/// be), and never before the start.
+pub fn pray_time(start: DateTime<Tz>, end: DateTime<Tz>, after: Option<u32>) -> DateTime<Tz> {
+    let Some(mins) = after.filter(|m| *m > 0) else {
+        return start;
+    };
+    let target = start
+        .checked_add_signed(Duration::minutes(mins as i64))
+        .unwrap_or(start);
+    let latest = end
+        .checked_sub_signed(Duration::minutes(PRAY_TIME_END_MARGIN_MINUTES))
+        .unwrap_or(start);
+    target.min(latest).max(start)
 }
 
 /// The end of a prayer's valid window:
@@ -92,63 +123,58 @@ pub fn prayer_day(now: DateTime<Tz>, tz: Tz, yesterday: Option<&DayTimings>) -> 
     today
 }
 
+/// The windows of the prayers whose alarms are switched on, in order.
+pub fn windows(day: &DayTimings, tz: Tz, settings: &Settings) -> Vec<PrayerWindow> {
+    Prayer::ALL
+        .into_iter()
+        .filter(|p| settings.prayer_settings.get(*p).enabled)
+        .filter_map(|prayer| {
+            let (start, end) = window(prayer, day, tz)?;
+            Some(PrayerWindow { prayer, start, end })
+        })
+        .collect()
+}
+
 pub fn compute(day: &DayTimings, tz: Tz, settings: &Settings) -> Vec<PlannedEvent> {
     let mut events = Vec::new();
 
-    for prayer in Prayer::ALL {
-        let ps = settings.prayer_settings.get(prayer);
-        if !ps.enabled {
-            continue;
-        }
-        let Some((start, end)) = window(prayer, day, tz) else {
-            continue;
-        };
-
-        // Main alarm: exactly at the start time, or delayed N minutes after
-        // it when a value is set ("you still have … minutes"). The delay is
-        // clamped so the alarm never lands in the last 5 minutes of the
-        // window (that's the before-end warning's job).
-        let delay = ps.reminder_minutes;
-        let (at, delayed) = match delay {
-            Some(mins) => {
-                let target = start
-                    .checked_add_signed(Duration::minutes(mins as i64))
-                    .unwrap_or(start);
-                let latest = end
-                    .checked_sub_signed(Duration::minutes(5))
-                    .unwrap_or(start);
-                let at = if latest > start {
-                    target.min(latest)
-                } else {
-                    start
-                };
-                (at, at > start)
-            }
-            None => (start, false),
-        };
-        events.push(PlannedEvent {
-            kind: EventKind::Start,
-            delayed,
+    for PrayerWindow { prayer, start, end } in windows(day, tz, settings) {
+        let pray_at = pray_time(start, end, settings.prayer_settings.get(prayer).pray_after_minutes);
+        let event = |kind, at| PlannedEvent {
+            kind,
             prayer,
             at,
-            start,
             end,
-        });
+            pray_at,
+        };
 
-        // Final warning shortly before the window closes ("you will miss it").
+        // "Get ready": N minutes before the user's prayer time (at most an
+        // hour), never before the Prayer Day's calendar date begins — earlier
+        // would belong to the previous Prayer Day and never ring.
+        if settings.get_ready_enabled && settings.get_ready_minutes > 0 {
+            let mins = settings.get_ready_minutes.min(MAX_GET_READY_MINUTES);
+            if let Some(target) = pray_at.checked_sub_signed(Duration::minutes(mins as i64)) {
+                let day_begins = timeutil::resolve(tz, day.date, NaiveTime::MIN);
+                let at = day_begins.map_or(target, |b| target.max(b));
+                if at < pray_at {
+                    events.push(event(EventKind::GetReady, at));
+                }
+            }
+        }
+
+        // "Prayer time": the Main Alarm, at the user's prayer time.
+        if settings.start_alarm_enabled {
+            events.push(event(EventKind::Start, pray_at));
+        }
+
+        // "Don't miss it": shortly before the window closes, and only when
+        // that is after the user's prayer time.
         if settings.pre_end_warning_enabled && settings.pre_end_warning_minutes > 0 {
             if let Some(at) =
                 end.checked_sub_signed(Duration::minutes(settings.pre_end_warning_minutes as i64))
             {
-                if at > start + Duration::minutes(2) {
-                    events.push(PlannedEvent {
-                        kind: EventKind::PreEnd,
-                        delayed: false,
-                        prayer,
-                        at,
-                        start,
-                        end,
-                    });
+                if at > start + Duration::minutes(2) && at > pray_at {
+                    events.push(event(EventKind::PreEnd, at));
                 }
             }
         }
@@ -187,36 +213,34 @@ pub fn due(at: DateTime<Tz>, now: DateTime<Tz>, already_fired: bool) -> Due {
     }
 }
 
-/// The event the UI should feature: the open window of a prayer that isn't
-/// done (`true` = current), else the earliest upcoming main alarm (`false`).
-/// `None` means nothing is left in this Prayer Day.
+/// The prayer the UI should feature: the open window of a prayer that isn't
+/// done (`true` = current), else the earliest window still to start
+/// (`false`). `None` means nothing is left in this Prayer Day. Works from
+/// windows, not alarms, so it holds with every alarm switched off and after a
+/// "Get ready" has already rung.
 pub fn featured<'a>(
-    events: &'a [PlannedEvent],
+    windows: &'a [PrayerWindow],
     now: DateTime<Tz>,
     is_done: impl Fn(Prayer) -> bool,
-) -> Option<(&'a PlannedEvent, bool)> {
-    let mut upcoming: Option<&PlannedEvent> = None;
-    for event in events {
-        if is_done(event.prayer) {
+) -> Option<(&'a PrayerWindow, bool)> {
+    let mut upcoming: Option<&PrayerWindow> = None;
+    for w in windows {
+        if is_done(w.prayer) {
             continue;
         }
-        if now >= event.start && now < event.end {
-            return Some((event, true));
+        if now >= w.start && now < w.end {
+            return Some((w, true));
         }
-        if event.kind == EventKind::Start && event.at > now {
-            let better = upcoming.map(|u| event.at < u.at).unwrap_or(true);
-            if better {
-                upcoming = Some(event);
-            }
+        if w.start > now && upcoming.map_or(true, |u| w.start < u.start) {
+            upcoming = Some(w);
         }
     }
-    upcoming.map(|e| (e, false))
+    upcoming.map(|w| (w, false))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::PrayerSettings;
     use chrono::TimeZone;
     use std::collections::HashMap;
 
@@ -268,14 +292,6 @@ mod tests {
 
     fn at(tz: Tz, date: &str, hm: &str) -> DateTime<Tz> {
         tz.from_local_datetime(&d(date).and_time(t(hm))).unwrap()
-    }
-
-    fn no_reminders() -> Settings {
-        let mut s = Settings::default();
-        for p in Prayer::ALL {
-            s.prayer_settings.get_mut(p).reminder_minutes = None;
-        }
-        s
     }
 
     fn find(events: &[PlannedEvent], prayer: Prayer, kind: EventKind) -> Option<&PlannedEvent> {
@@ -345,44 +361,121 @@ mod tests {
     // -- compute ----------------------------------------------------------------
 
     #[test]
-    fn default_settings_plan_delayed_alarm_and_pre_end_warning() {
+    fn default_settings_ring_at_start_and_before_end() {
         let day = dhaka_day("2026-11-09");
         let events = compute(&day, DHAKA, &Settings::default());
 
         let dhuhr = find(&events, Prayer::Dhuhr, EventKind::Start).unwrap();
-        assert_eq!(dhuhr.at, at(DHAKA, "2026-11-09", "12:20"));
-        assert!(dhuhr.delayed);
+        assert_eq!(dhuhr.at, at(DHAKA, "2026-11-09", "11:50"));
 
         let pre_end = find(&events, Prayer::Dhuhr, EventKind::PreEnd).unwrap();
         assert_eq!(pre_end.at, at(DHAKA, "2026-11-09", "15:30"));
 
-        // Maghrib has no delay by default.
-        let maghrib = find(&events, Prayer::Maghrib, EventKind::Start).unwrap();
-        assert_eq!(maghrib.at, at(DHAKA, "2026-11-09", "17:20"));
-        assert!(!maghrib.delayed);
+        // Get ready is opt-in.
+        assert!(events.iter().all(|e| e.kind != EventKind::GetReady));
+    }
+
+    fn get_ready(minutes: u32) -> Settings {
+        let mut s = Settings::default();
+        s.get_ready_enabled = true;
+        s.get_ready_minutes = minutes;
+        s
     }
 
     #[test]
-    fn alarm_at_start_when_no_reminder() {
+    fn get_ready_rings_before_start_and_keeps_the_start_alarm() {
         let day = dhaka_day("2026-11-09");
-        let events = compute(&day, DHAKA, &no_reminders());
-        let fajr = find(&events, Prayer::Fajr, EventKind::Start).unwrap();
-        assert_eq!(fajr.at, fajr.start);
-        assert!(!fajr.delayed);
+        let events = compute(&day, DHAKA, &get_ready(10));
+        let early = find(&events, Prayer::Asr, EventKind::GetReady).unwrap();
+        assert_eq!(early.at, at(DHAKA, "2026-11-09", "15:30"));
+        assert_eq!(early.pray_at, at(DHAKA, "2026-11-09", "15:40"));
+        let start = find(&events, Prayer::Asr, EventKind::Start).unwrap();
+        assert_eq!(start.at, at(DHAKA, "2026-11-09", "15:40"));
     }
 
     #[test]
-    fn delay_is_clamped_to_five_minutes_before_end() {
+    fn get_ready_is_clamped_to_an_hour() {
+        let day = dhaka_day("2026-11-09");
+        let events = compute(&day, DHAKA, &get_ready(500));
+        let early = find(&events, Prayer::Asr, EventKind::GetReady).unwrap();
+        assert_eq!(early.at, at(DHAKA, "2026-11-09", "14:40"));
+    }
+
+    #[test]
+    fn get_ready_never_rings_before_its_calendar_date() {
+        // Fajr at 00:30 (far north in summer): an hour early would be 23:30
+        // the day before, which belongs to another Prayer Day. Clamp to 00:00.
+        let mut day = london_summer_day("2026-06-21");
+        day.times.insert(Prayer::Fajr, t("00:30"));
+        let events = compute(&day, LONDON, &get_ready(60));
+        let early = find(&events, Prayer::Fajr, EventKind::GetReady).unwrap();
+        assert_eq!(early.at, at(LONDON, "2026-06-21", "00:00"));
+    }
+
+    #[test]
+    fn get_ready_dropped_when_prayer_starts_at_the_day_boundary() {
+        let mut day = london_summer_day("2026-06-21");
+        day.times.insert(Prayer::Fajr, t("00:00"));
+        let events = compute(&day, LONDON, &get_ready(10));
+        assert!(find(&events, Prayer::Fajr, EventKind::GetReady).is_none());
+    }
+
+    fn pray_after(prayer: Prayer, mins: u32, s: &mut Settings) {
+        s.prayer_settings.get_mut(prayer).pray_after_minutes = Some(mins);
+    }
+
+    #[test]
+    fn alarms_follow_the_users_own_prayer_time() {
+        // Dhuhr starts 11:50; the user prays 70 min later, at 13:00.
+        let day = dhaka_day("2026-11-09");
+        let mut s = get_ready(10);
+        pray_after(Prayer::Dhuhr, 70, &mut s);
+        let events = compute(&day, DHAKA, &s);
+
+        let early = find(&events, Prayer::Dhuhr, EventKind::GetReady).unwrap();
+        assert_eq!(early.at, at(DHAKA, "2026-11-09", "12:50"));
+        let main = find(&events, Prayer::Dhuhr, EventKind::Start).unwrap();
+        assert_eq!(main.at, at(DHAKA, "2026-11-09", "13:00"));
+        assert_eq!(main.pray_at, main.at);
+        // The window and "Don't miss it" stay tied to the real times.
+        assert_eq!(window(Prayer::Dhuhr, &day, DHAKA).unwrap().0, at(DHAKA, "2026-11-09", "11:50"));
+        let pre_end = find(&events, Prayer::Dhuhr, EventKind::PreEnd).unwrap();
+        assert_eq!(pre_end.at, at(DHAKA, "2026-11-09", "15:30"));
+    }
+
+    #[test]
+    fn own_prayer_time_moves_with_the_start_time() {
+        // Same 70 minutes on a day Dhuhr starts at 12:05 → 13:15.
+        let mut day = dhaka_day("2026-11-10");
+        day.times.insert(Prayer::Dhuhr, t("12:05"));
+        let mut s = Settings::default();
+        pray_after(Prayer::Dhuhr, 70, &mut s);
+        let events = compute(&day, DHAKA, &s);
+        let main = find(&events, Prayer::Dhuhr, EventKind::Start).unwrap();
+        assert_eq!(main.at, at(DHAKA, "2026-11-10", "13:15"));
+    }
+
+    #[test]
+    fn own_prayer_time_stays_out_of_the_last_five_minutes() {
+        // Fajr 05:00–06:15: 500 minutes after would be past sunrise.
         let day = dhaka_day("2026-11-09");
         let mut s = Settings::default();
-        *s.prayer_settings.get_mut(Prayer::Fajr) = PrayerSettings {
-            enabled: true,
-            reminder_minutes: Some(500),
-        };
+        pray_after(Prayer::Fajr, 500, &mut s);
         let events = compute(&day, DHAKA, &s);
-        let fajr = find(&events, Prayer::Fajr, EventKind::Start).unwrap();
-        assert_eq!(fajr.at, at(DHAKA, "2026-11-09", "06:10"));
-        assert!(fajr.delayed);
+        let main = find(&events, Prayer::Fajr, EventKind::Start).unwrap();
+        assert_eq!(main.at, at(DHAKA, "2026-11-09", "06:10"));
+        // "Don't miss it" (06:05) would now ring before the prayer time:
+        // dropped.
+        assert!(find(&events, Prayer::Fajr, EventKind::PreEnd).is_none());
+    }
+
+    #[test]
+    fn start_alarm_can_be_turned_off() {
+        let day = dhaka_day("2026-11-09");
+        let mut s = Settings::default();
+        s.start_alarm_enabled = false;
+        let events = compute(&day, DHAKA, &s);
+        assert!(events.iter().all(|e| e.kind != EventKind::Start));
     }
 
     #[test]
@@ -409,7 +502,7 @@ mod tests {
         // 1 minute after the start: dropped.
         let mut day = dhaka_day("2026-11-09");
         day.times.insert(Prayer::Isha, t("17:30"));
-        let mut s = no_reminders();
+        let mut s = Settings::default();
         s.pre_end_warning_minutes = 9;
         let events = compute(&day, DHAKA, &s);
         assert!(find(&events, Prayer::Maghrib, EventKind::PreEnd).is_none());
@@ -451,9 +544,9 @@ mod tests {
     #[test]
     fn featured_prefers_open_window() {
         let day = dhaka_day("2026-11-09");
-        let events = compute(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default());
         let now = at(DHAKA, "2026-11-09", "12:00");
-        let (e, current) = featured(&events, now, |_| false).unwrap();
+        let (e, current) = featured(&ws, now, |_| false).unwrap();
         assert_eq!(e.prayer, Prayer::Dhuhr);
         assert!(current);
     }
@@ -461,9 +554,9 @@ mod tests {
     #[test]
     fn featured_skips_done_and_picks_next_start() {
         let day = dhaka_day("2026-11-09");
-        let events = compute(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default());
         let now = at(DHAKA, "2026-11-09", "12:00");
-        let (e, current) = featured(&events, now, |p| p == Prayer::Dhuhr).unwrap();
+        let (e, current) = featured(&ws, now, |p| p == Prayer::Dhuhr).unwrap();
         assert_eq!(e.prayer, Prayer::Asr);
         assert!(!current);
     }
@@ -472,9 +565,9 @@ mod tests {
     fn featured_between_windows_is_next_prayer() {
         // 06:30: Fajr closed at sunrise, Dhuhr not started yet.
         let day = dhaka_day("2026-11-09");
-        let events = compute(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default());
         let now = at(DHAKA, "2026-11-09", "06:30");
-        let (e, current) = featured(&events, now, |_| false).unwrap();
+        let (e, current) = featured(&ws, now, |_| false).unwrap();
         assert_eq!(e.prayer, Prayer::Dhuhr);
         assert!(!current);
     }
@@ -482,18 +575,43 @@ mod tests {
     #[test]
     fn featured_isha_after_midnight() {
         let day = london_summer_day("2026-06-20");
-        let events = compute(&day, LONDON, &Settings::default());
+        let ws = windows(&day, LONDON, &Settings::default());
         let now = at(LONDON, "2026-06-21", "00:30");
-        let (e, current) = featured(&events, now, |_| false).unwrap();
+        let (e, current) = featured(&ws, now, |_| false).unwrap();
         assert_eq!(e.prayer, Prayer::Isha);
         assert!(current);
     }
 
     #[test]
+    fn featured_after_get_ready_is_still_that_prayer() {
+        // Dhuhr done; Asr's get-ready rang at 15:30. At 15:35 the upcoming
+        // prayer is still Asr, not Maghrib.
+        let day = dhaka_day("2026-11-09");
+        let ws = windows(&day, DHAKA, &get_ready(10));
+        let now = at(DHAKA, "2026-11-09", "15:35");
+        let (w, current) = featured(&ws, now, |p| p == Prayer::Dhuhr).unwrap();
+        assert_eq!(w.prayer, Prayer::Asr);
+        assert!(!current);
+    }
+
+    #[test]
+    fn featured_works_with_every_alarm_off() {
+        // The next-prayer card doesn't depend on alarms being on.
+        let day = dhaka_day("2026-11-09");
+        let mut s = Settings::default();
+        s.start_alarm_enabled = false;
+        s.pre_end_warning_enabled = false;
+        let ws = windows(&day, DHAKA, &s);
+        let now = at(DHAKA, "2026-11-09", "06:30");
+        let (w, _) = featured(&ws, now, |_| false).unwrap();
+        assert_eq!(w.prayer, Prayer::Dhuhr);
+    }
+
+    #[test]
     fn featured_none_after_last_window() {
         let day = dhaka_day("2026-11-09");
-        let events = compute(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default());
         let now = at(DHAKA, "2026-11-09", "23:30");
-        assert!(featured(&events, now, |_| false).is_none());
+        assert!(featured(&ws, now, |_| false).is_none());
     }
 }

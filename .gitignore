@@ -29,3 +29,4 @@ src-tauri/target
 /.cargo/config.toml
 # ts-rs output when `cargo test` runs outside src-tauri/ (wrong place)
 /src-tauri/bindings/
+.superpowers/

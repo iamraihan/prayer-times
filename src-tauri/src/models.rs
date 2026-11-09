@@ -169,26 +169,26 @@ impl<'de> Deserialize<'de> for TimeFormat {
     }
 }
 
+/// One prayer's alarm settings: its switch (the prayer chips) and when the
+/// user actually prays it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 #[cfg_attr(test, derive(TS), ts(export))]
 pub struct PrayerSettings {
     pub enabled: bool,
-    /// Minutes to delay the prayer's main alarm after its start time.
-    /// `None` = alarm exactly at the start time (default for Maghrib).
-    pub reminder_minutes: Option<u32>,
+    /// "I pray N min after it starts" (e.g. the mosque's jamaat): moves the
+    /// Get-Ready and Main Alarms to that moment. `None` = at the start.
+    /// Older versions wrote this as `reminderMinutes` (a delayed Main Alarm,
+    /// which rang at the same moment).
+    #[serde(alias = "reminderMinutes")]
+    pub pray_after_minutes: Option<u32>,
 }
 
-impl PrayerSettings {
-    pub fn default_for(prayer: Prayer) -> Self {
+impl Default for PrayerSettings {
+    fn default() -> Self {
         Self {
             enabled: true,
-            // Maghrib's window is short: no mid-window reminder by default.
-            reminder_minutes: if prayer == Prayer::Maghrib {
-                None
-            } else {
-                Some(30)
-            },
+            pray_after_minutes: None,
         }
     }
 }
@@ -196,18 +196,18 @@ impl PrayerSettings {
 /// One entry per prayer — a struct rather than a map so every prayer is
 /// always present (same JSON shape as a `{ "fajr": …, … }` map). A prayer
 /// missing from an older settings file gets its default.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(TS), ts(export))]
 pub struct PrayerSettingsMap {
-    #[serde(default = "PrayerSettingsMap::default_fajr")]
+    #[serde(default)]
     pub fajr: PrayerSettings,
-    #[serde(default = "PrayerSettingsMap::default_dhuhr")]
+    #[serde(default)]
     pub dhuhr: PrayerSettings,
-    #[serde(default = "PrayerSettingsMap::default_asr")]
+    #[serde(default)]
     pub asr: PrayerSettings,
-    #[serde(default = "PrayerSettingsMap::default_maghrib")]
+    #[serde(default)]
     pub maghrib: PrayerSettings,
-    #[serde(default = "PrayerSettingsMap::default_isha")]
+    #[serde(default)]
     pub isha: PrayerSettings,
 }
 
@@ -231,34 +231,6 @@ impl PrayerSettingsMap {
             Prayer::Isha => &mut self.isha,
         }
     }
-
-    fn default_fajr() -> PrayerSettings {
-        PrayerSettings::default_for(Prayer::Fajr)
-    }
-    fn default_dhuhr() -> PrayerSettings {
-        PrayerSettings::default_for(Prayer::Dhuhr)
-    }
-    fn default_asr() -> PrayerSettings {
-        PrayerSettings::default_for(Prayer::Asr)
-    }
-    fn default_maghrib() -> PrayerSettings {
-        PrayerSettings::default_for(Prayer::Maghrib)
-    }
-    fn default_isha() -> PrayerSettings {
-        PrayerSettings::default_for(Prayer::Isha)
-    }
-}
-
-impl Default for PrayerSettingsMap {
-    fn default() -> Self {
-        Self {
-            fajr: Self::default_fajr(),
-            dhuhr: Self::default_dhuhr(),
-            asr: Self::default_asr(),
-            maghrib: Self::default_maghrib(),
-            isha: Self::default_isha(),
-        }
-    }
 }
 
 /// `serde(default)`: a field missing from an older settings file takes its
@@ -280,6 +252,12 @@ pub struct Settings {
     /// (e.g. "alarm-tone.mp3"); `None` = built-in chime.
     pub alarm_sound: Option<String>,
     pub popup_enabled: bool,
+    /// "Get ready": a heads-up `get_ready_minutes` before each prayer starts.
+    pub get_ready_enabled: bool,
+    pub get_ready_minutes: u32,
+    /// "Prayer time": the Main Alarm at each prayer's start.
+    pub start_alarm_enabled: bool,
+    /// "Don't miss it" in the UI.
     pub pre_end_warning_enabled: bool,
     pub pre_end_warning_minutes: u32,
     pub prayer_settings: PrayerSettingsMap,
@@ -297,6 +275,9 @@ impl Default for Settings {
             sound_volume: 0.8,
             alarm_sound: None,
             popup_enabled: true,
+            get_ready_enabled: false,
+            get_ready_minutes: 10,
+            start_alarm_enabled: true,
             pre_end_warning_enabled: true,
             pre_end_warning_minutes: 10,
             prayer_settings: PrayerSettingsMap::default(),
@@ -353,6 +334,9 @@ pub struct ActiveAlarmDto {
     pub prayer: Prayer,
     pub kind: crate::engine::AlarmKind,
     pub started_at: String,
+    /// When the user prays this prayer: its start, or "N min after"
+    /// (for a "Get ready" alarm's countdown).
+    pub pray_at: String,
     /// End of the prayer window (for the popup's live countdown).
     pub ends_at: String,
     pub message: AlarmMessageDto,
@@ -434,7 +418,9 @@ mod tests {
         let json = serde_json::to_value(&s).unwrap();
         assert_eq!(json["school"], 1);
         assert_eq!(json["timeFormat"], "24h");
-        assert_eq!(json["prayerSettings"]["maghrib"]["reminderMinutes"], serde_json::Value::Null);
+        assert_eq!(json["prayerSettings"]["maghrib"]["enabled"], true);
+        assert_eq!(json["getReadyEnabled"], false);
+        assert_eq!(json["startAlarmEnabled"], true);
     }
 
     #[test]
@@ -446,9 +432,30 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.school, AsrSchool::Hanafi);
         assert!(s.time_format.is_24h());
-        // Missing prayers get their own defaults (Maghrib: no delay).
-        assert_eq!(s.prayer_settings.get(Prayer::Fajr).reminder_minutes, Some(30));
-        assert_eq!(s.prayer_settings.get(Prayer::Maghrib).reminder_minutes, None);
+        // Missing prayers default to on; the new alarms take their defaults.
+        assert!(s.prayer_settings.get(Prayer::Fajr).enabled);
+        assert!(!s.get_ready_enabled);
+        assert!(s.start_alarm_enabled);
+    }
+
+    #[test]
+    fn old_alarm_delay_becomes_the_users_prayer_time() {
+        // Older versions stored a delayed Main Alarm as `reminderMinutes`;
+        // it rang at the same moment "I pray N min after" now does.
+        let json = r#"{"prayerSettings":{"asr":{"enabled":false,"reminderMinutes":30},
+            "dhuhr":{"enabled":true,"reminderMinutes":45},
+            "maghrib":{"enabled":true,"reminderMinutes":null},"isha":{}}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(!s.prayer_settings.get(Prayer::Asr).enabled);
+        assert_eq!(s.prayer_settings.get(Prayer::Asr).pray_after_minutes, Some(30));
+        assert_eq!(s.prayer_settings.get(Prayer::Dhuhr).pray_after_minutes, Some(45));
+        assert_eq!(s.prayer_settings.get(Prayer::Maghrib).pray_after_minutes, None);
+        assert!(s.prayer_settings.get(Prayer::Isha).enabled);
+        assert_eq!(s.prayer_settings.get(Prayer::Isha).pray_after_minutes, None);
+        // Written back under the new name only.
+        let out = serde_json::to_value(&s).unwrap();
+        assert_eq!(out["prayerSettings"]["dhuhr"]["prayAfterMinutes"], 45);
+        assert!(out["prayerSettings"]["dhuhr"].get("reminderMinutes").is_none());
     }
 
     #[test]

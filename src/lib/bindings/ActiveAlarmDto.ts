@@ -5,6 +5,11 @@ import type { Prayer } from "./Prayer";
 
 export type ActiveAlarmDto = { id: string, prayer: Prayer, kind: AlarmKind, startedAt: string, 
 /**
+ * When the user prays this prayer: its start, or "N min after"
+ * (for a "Get ready" alarm's countdown).
+ */
+prayAt: string, 
+/**
  * End of the prayer window (for the popup's live countdown).
  */
 endsAt: string, message: AlarmMessageDto, };

@@ -50,13 +50,22 @@ The app checks for updates on every launch and on demand from
 
 ## Alarm behavior
 
-For each prayer (Fajr, Dhuhr, Asr, Maghrib, Isha) the scheduler plans:
+Settings → **When alarms ring** has three alarms, each with its own switch,
+applied to every prayer (Fajr, Dhuhr, Asr, Maghrib, Isha). Tap a prayer under
+**Ring for** to turn its alarms off.
 
-| Alarm        | When it fires                                              | Default |
-| ------------ | ---------------------------------------------------------- | ------- |
-| Main         | at the prayer's start time — or N minutes after it when a per-prayer delay is set ("you still have N minutes") | +30 min delay (Maghrib: exactly at start) |
-| Before-end   | N minutes before the window closes — "you will miss it"     | 10 min  |
-| Snooze       | when a "Remind me again in N minutes" answer is due         | user-set minutes |
+If you pray later than the start (say with your mosque's jamaat), set
+Settings → **When you pray** → "N min after start" for that prayer. Get ready
+and Prayer time follow it, and it moves with the start time every day
+(Dhuhr starts 11:45 + 75 min → 1:00 PM; next month 12:05 → 1:20 PM). It is
+never placed in the window's last 5 minutes.
+
+| Alarm          | When it fires                                                  | Default |
+| -------------- | -------------------------------------------------------------- | ------- |
+| Get ready      | N minutes before you pray — "Asr in 10 minutes" (5–60 min)     | off, 10 min |
+| Prayer time    | when you pray: the start time, or your own time (below)        | on      |
+| Don't miss it  | N minutes before the window closes, if not marked done — "you will miss it" | on, 10 min |
+| Snooze         | when a "Remind me again in N minutes" answer is due            | user-set minutes |
 
 Each alarm shows **all three channels** (each can be toggled in Settings):
 
@@ -75,6 +84,8 @@ From the popup, the in-app banner, or the tray menu you can:
   number of minutes; the alarm re-fires then.
 - **Dismiss for now** — stops the sound; later reminders still fire because
   the prayer isn't marked done.
+- **Got it** (Get ready only) — the prayer hasn't started yet, so it can't
+  be marked done; this stops the alarm and the later alarms still fire.
 
 A prayer window closes at: Fajr → sunrise, Dhuhr → Asr, Asr → Maghrib,
 Maghrib → Isha, Isha → midnight.
