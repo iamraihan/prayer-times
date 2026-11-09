@@ -29,6 +29,8 @@ windows are hidden.
 │                                                               │      │
 │  schedule.rs  pure: DayTimings + Settings → [PlannedEvent]     │      │
 │  aladhan.rs   API client + month disk cache                    │      │
+│  geocode.rs   city search (Open-Meteo) for the location picker │      │
+│  tzcountry.rs timezone → countries (vendored tzdb tables)       │      │
 │  alarm.rs     notification + always-on-top popup window        │      │
 │  models.rs    domain + DTOs (camelCase on the wire)            │      │
 │  settings.rs / runtime.rs   JSON persistence                   │      │
@@ -40,9 +42,11 @@ windows are hidden.
 
 1. **Startup** — `Engine::new` loads `settings.json` + `runtime.json`,
    builds the tray and (hidden) alarm window, spawns the engine thread.
-2. **Month load** — `plan_fetches` wants today's and tomorrow's months:
+2. **Month load** — `plan_fetches` wants the months of yesterday, today
+   and tomorrow (location dates):
    memory → disk cache → network (throttled to one retry/minute). Months
-   are cached per `(method, school, year, month)`.
+   are cached per `(location, method, school, year, month)`; a fetch that
+   finishes after the location changed is dropped.
 3. **Every tick (15 s)** — `schedule::compute` derives the day's events;
    due events (within a 10-minute grace for missed ones) fire; the tray and
    both windows get a fresh snapshot.
@@ -54,6 +58,8 @@ windows are hidden.
 
 `id = "{date}|{prayer}|{start|reminder|preEnd}"`
 
+- "day" here is the **Prayer Day** (`schedule::prayer_day`): the calendar
+  date, except while yesterday's Isha window is still open past midnight.
 - `fired` (persisted in `runtime.json`) prevents replays after restart;
   on restart, events older than the grace window are marked fired silently.
 - `done` marks suppress all remaining events of that prayer for the day and
@@ -72,7 +78,8 @@ src/
   pages/                      TodayPage, SettingsPage
   components/                 feature components + ui/ primitives
   store/useAppStore.ts        single zustand store (state + 1s clock)
-  lib/                        types (mirror of models.rs), ipc wrappers,
+  lib/                        bindings/ (generated from models.rs), types,
+                               typed ipc wrappers,
                                actions, time format helpers, static data
 ```
 
@@ -80,8 +87,11 @@ Rules of thumb:
 
 - **One store, backend as source of truth.** UI never computes schedule
   logic; it renders the snapshot and sends intents via `lib/actions.ts`.
-- **Keep DTOs in sync**: `src/lib/types.ts` ↔ `src-tauri/src/models.rs`
-  (both camelCase). Change them together.
+- **IPC types are generated, never hand-written**: every Rust type that
+  crosses IPC derives `ts_rs::TS`; `cargo test` writes its TypeScript twin
+  to `src/lib/bindings/` (commit the result — CI fails on a stale diff).
+  `src/lib/types.ts` only re-exports them; `src/lib/ipc.ts` maps each command
+  name to its argument and result types.
 
 ## Extending
 
@@ -95,8 +105,12 @@ Rules of thumb:
   a summary command.
 - **Autostart on login**: add `tauri-plugin-autostart`, init in `lib.rs`,
   toggle in Settings.
-- **Unit tests**: `schedule.rs`, `timeutil.rs` and `aladhan::parse_hm` are
-  pure — ideal for `#[cfg(test)]` tests; the engine itself stays thin.
+- **Unit tests**: run `cargo test` in `src-tauri/` (CI runs it on all three
+  OSes). Scheduling decisions live in `schedule.rs` as pure functions that
+  take `now` as a parameter (`compute`, `window`, `prayer_day`, `due`,
+  `featured`) and are tested there; `timeutil.rs` and `aladhan.rs` parsing
+  have tests too. Put new decision logic in `schedule.rs`, not `engine.rs`,
+  so it can be tested without a running app.
 
 ## Deliberate decisions
 
@@ -104,6 +118,15 @@ Rules of thumb:
   sleep/wake and clock changes; missed events fire late within grace.
 - **Wall-clock math in the location's IANA zone** (from the API), never the
   device zone.
+- **Per-day state follows the Prayer Day, not the calendar day** — see
+  [ADR 0001](docs/adr/0001-prayer-day-rollover.md).
+- **Locations are picked, not typed**: the wizard searches Open-Meteo and
+  stores the chosen city's coordinates + timezone; times are then fetched
+  by coordinates. A typed name (fallback when search can't find a town, and
+  every location saved by older versions) goes through Aladhan's name lookup, which
+  can silently match a place elsewhere — so it is rejected when the matched
+  timezone isn't used in the chosen country (`tzcountry.rs`), and a saved one
+  shows a warning.
 - **Month-granularity caching** keeps the app fully offline for the current
   month and costs one request per month online.
 - **Fetches happen only on the engine thread, outside the state lock**, so

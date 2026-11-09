@@ -1,12 +1,23 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Check, Download, ExternalLink, FolderOpen, Loader2, MapPin, RotateCcw, Save, Undo2, Volume2 } from "lucide-react";
+import { useEffect, useRef, useState, type InputHTMLAttributes } from "react";
+import {
+  Check,
+  Download,
+  ExternalLink,
+  FolderOpen,
+  Loader2,
+  MapPin,
+  RotateCcw,
+  TriangleAlert,
+  Undo2,
+  Volume2,
+} from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "../components/ui/Button";
-import { Card } from "../components/ui/Card";
+import { Section, SettingRow } from "../components/ui/Section";
 import { Toast, type ToastData } from "../components/ui/Toast";
 import { Toggle } from "../components/ui/Toggle";
-import { NumberField, SelectField, SliderField } from "../components/ui/fields";
+import { Select, SliderField, UnitInput } from "../components/ui/fields";
 import { SetupWizard } from "../components/SetupWizard";
 import { useAppState } from "../store/useAppStore";
 import { IS_MAC, useUpdateStore } from "../store/useUpdateStore";
@@ -20,7 +31,7 @@ import {
 } from "../lib/actions";
 import { METHODS } from "../lib/methods";
 import { PRAYERS, PRAYER_LABELS, type Prayer, type Settings } from "../lib/types";
-import { fmtClock } from "../lib/time";
+import { fmtClock, parseHM } from "../lib/time";
 import { cn } from "../lib/cn";
 
 /**
@@ -31,7 +42,7 @@ export function SettingsPage() {
   const state = useAppState();
   const settings = state?.settings ?? null;
   const [draft, setDraft] = useState<Settings | null>(settings);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [toast, setToast] = useState<ToastData | null>(null);
   const [changingLocation, setChangingLocation] = useState(false);
   const [toneBusy, setToneBusy] = useState(false);
@@ -56,21 +67,20 @@ export function SettingsPage() {
 
   // "Alarm at 12:16 PM" — today's start time + the draft's delay minutes.
   function reminderHint(prayer: Prayer): string | null {
-    const mins = draft?.prayerSettings[prayer]?.reminderMinutes;
-    const start = state?.today?.timings.find((t) => t.prayer === prayer)?.start;
+    const mins = draft?.prayerSettings[prayer].reminderMinutes;
+    const hm = state?.today?.timings.find((t) => t.prayer === prayer)?.start;
+    const start = hm ? parseHM(hm) : null;
     if (!start) return null;
-    const [h, m] = start.split(":").map(Number);
     const d = new Date();
-    d.setHours(h, (m ?? 0) + (mins ?? 0), 0, 0);
-    const mode = draft?.timeFormat === "24h" ? "24h" : "12h";
+    d.setHours(start.h, start.m + (mins ?? 0), 0, 0);
+    const mode = draft?.timeFormat ?? "12h";
     return `Alarm at ${fmtClock(d, mode)}`;
   }
 
   // Rebase the draft whenever the backend pushes new settings (tone picked,
-  // volume saved, location changed…): fields the user hasn't edited take the
-  // new value, edited fields keep the user's pending change. Comparing the
-  // draft against the *new* settings (the old logic) left the draft stale
-  // after any instant change, e.g. a just-picked tone showed as "unsaved".
+  // a save landing, location changed…): fields the user hasn't edited since
+  // take the new value, an edit still waiting to be saved keeps the user's
+  // value.
   const prevSettings = useRef<Settings | null>(settings);
   useEffect(() => {
     const prev = prevSettings.current;
@@ -78,79 +88,75 @@ export function SettingsPage() {
     setDraft((d) => (d && prev && settings ? rebase(d, prev, settings) : d ?? settings));
   }, [settings]);
 
-  // Volume applies instantly (like the tone): debounce while dragging, then
-  // persist the *saved* settings + new volume so other pending draft edits
-  // aren't committed behind the user's back.
-  const volumeTimer = useRef<number | undefined>(undefined);
-  const latestSettings = useRef(settings);
-  latestSettings.current = settings;
-  useEffect(() => () => window.clearTimeout(volumeTimer.current), []);
+  // Every change applies instantly. Saves are serialized — one in flight, and
+  // whatever changed meanwhile goes out right after — so responses can't
+  // arrive out of order and revert a newer edit.
+  const saveTimer = useRef<number | undefined>(undefined);
+  const pending = useRef<Settings | null>(null);
+  const inFlight = useRef(false);
 
-  function changeVolume(volume: number) {
-    patch({ soundVolume: volume });
-    window.clearTimeout(volumeTimer.current);
-    volumeTimer.current = window.setTimeout(() => {
-      const base = latestSettings.current;
-      if (!base || base.soundVolume === volume) return;
-      updateSettings({ ...base, soundVolume: volume }).catch((e) =>
-        setToast({ kind: "error", message: `Couldn't save volume: ${String(e)}` }),
-      );
-    }, 300);
-  }
-
-  const dirty = useMemo(
-    () => Boolean(draft && settings && !sameJson(draft, settings)),
-    [draft, settings],
-  );
-
-  // A new edit while the "Saved" confirmation is showing invalidates it.
-  useEffect(() => {
-    if (dirty && saveState === "saved") setSaveState("idle");
-  }, [dirty, saveState]);
-
-  if (!draft || !settings) {
-    return (
-      <div className="p-6 text-sm text-slate-400">Loading settings…</div>
-    );
-  }
-
-  function patch(p: Partial<Settings>) {
-    setDraft((d) => (d ? { ...d, ...p } : d));
-  }
-
-  function patchPrayer(prayer: (typeof PRAYERS)[number], p: Partial<Settings["prayerSettings"][keyof Settings["prayerSettings"]]>) {
-    setDraft((d) =>
-      d
-        ? {
-            ...d,
-            prayerSettings: {
-              ...d.prayerSettings,
-              [prayer]: { ...d.prayerSettings[prayer], ...p },
-            },
-          }
-        : d,
-    );
-  }
-
-  async function save() {
-    if (!draft) return;
-    // The draft already carries the volume; a pending debounced volume save
-    // would otherwise fire with the old base and revert this save.
-    window.clearTimeout(volumeTimer.current);
+  async function flush() {
+    window.clearTimeout(saveTimer.current);
+    if (inFlight.current || !pending.current) return;
+    const next = pending.current;
+    pending.current = null;
+    inFlight.current = true;
     setSaveState("saving");
     try {
-      await updateSettings(draft);
-      setSaveState("saved");
-      setToast({ kind: "success", message: "Settings saved" });
-      // Revert the button label once the confirmation has been seen.
-      window.setTimeout(
-        () => setSaveState((s) => (s === "saved" ? "idle" : s)),
-        2500,
-      );
+      await updateSettings(next);
+      setSaveState(pending.current ? "saving" : "saved");
     } catch (e) {
-      setSaveState("idle");
+      // Keep the edit queued so Retry resends it.
+      pending.current ??= next;
+      setSaveState("error");
       setToast({ kind: "error", message: `Couldn't save settings: ${String(e)}` });
+    } finally {
+      inFlight.current = false;
     }
+    if (pending.current && saveTimer.current === undefined) void flush();
+  }
+
+  function queueSave(next: Settings, delayMs: number) {
+    pending.current = next;
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = undefined;
+      void flush();
+    }, delayMs);
+  }
+
+  // Leaving the page must not drop an edit still in its debounce window.
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => () => void flushRef.current(), []);
+
+  if (!draft || !settings) {
+    return <div className="p-6 text-sm text-slate-400">Loading settings…</div>;
+  }
+
+  /** Applies `p` now; `delayMs` debounces typing and dragging. */
+  function patch(p: Partial<Settings>, delayMs = 0) {
+    if (!draft) return;
+    const next = { ...draft, ...p };
+    setDraft(next);
+    queueSave(next, delayMs);
+  }
+
+  function patchPrayer(
+    prayer: Prayer,
+    p: Partial<Settings["prayerSettings"][Prayer]>,
+    delayMs = 0,
+  ) {
+    if (!draft) return;
+    patch(
+      {
+        prayerSettings: {
+          ...draft.prayerSettings,
+          [prayer]: { ...draft.prayerSettings[prayer], ...p },
+        },
+      },
+      delayMs,
+    );
   }
 
   // The tone applies immediately (file operation), outside the draft/Save flow.
@@ -183,389 +189,297 @@ export function SettingsPage() {
     }
   }
 
+  const location = settings.location;
+
   return (
-    <div className="space-y-5 pb-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Settings</h1>
-        <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            disabled={!dirty || saveState === "saving"}
-            onClick={() => {
-              window.clearTimeout(volumeTimer.current);
-              setDraft(settings);
-            }}
-          >
-            <RotateCcw className="h-4 w-4" /> Reset
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!dirty || saveState === "saving"}
-            onClick={() => void save()}
-          >
-            {saveState === "saving" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : saveState === "saved" ? (
-              <Check className="h-4 w-4" />
-            ) : (
-              <Save className="h-4 w-4" />
-            )}{" "}
-            {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : "Save changes"}
-          </Button>
-        </div>
+    <div className="space-y-9 pb-6">
+      <div className="flex items-baseline justify-between gap-4 px-1">
+        <h1 className="text-xl font-semibold tracking-[-0.01em] text-slate-50">Settings</h1>
+        <SaveStatus state={saveState} onRetry={() => void flush()} />
       </div>
 
-      <Card
-        title="General"
-        description="App behaviour on system startup (applies instantly)."
-      >
-        <Row label="Start with Windows" hint="Runs quietly in the tray at login">
-          <Toggle
-            checked={autostart}
-            onChange={(v) => void toggleAutostart(v)}
-          />
-        </Row>
-      </Card>
-
-      <Card title="Location" description="Prayer times and the timezone are resolved from your city.">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {settings.location ? (
-            <p className="flex items-center gap-2 text-sm text-slate-300">
-              <MapPin className="h-4 w-4 text-emerald-400" />
-              {settings.location.city}, {settings.location.country}
-              <span className="text-xs text-slate-500">
-                ({settings.location.timezone})
+      <Section title="Location" description="Prayer times are calculated for this place.">
+        <SettingRow
+          label={
+            location ? (
+              <span className="flex items-center gap-2">
+                <MapPin className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
+                {[location.city, location.region, location.country].filter(Boolean).join(", ")}
               </span>
-            </p>
-          ) : (
-            <p className="text-sm text-slate-400">No location set.</p>
-          )}
+            ) : (
+              "No location set"
+            )
+          }
+          hint={location ? location.timezone : undefined}
+        >
           <Button onClick={() => setChangingLocation(true)}>Change…</Button>
-        </div>
-      </Card>
+        </SettingRow>
+        {state?.locationWarning && (
+          <p role="alert" className="flex items-start gap-2.5 px-4 py-3 text-[13px] leading-relaxed text-amber-200">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden />
+            {state.locationWarning}
+          </p>
+        )}
+        {location && !location.coordinates && !state?.locationWarning && (
+          <p className="px-4 py-3 text-[13px] leading-relaxed text-slate-400">
+            This city was set by name. Choose Change… and pick it from the list to get times for
+            its exact position.
+          </p>
+        )}
+      </Section>
 
-      <Card
-        title="Prayer time calculation"
-        description="Method and Asr school come from the Aladhan API. Changing these refetches the schedule."
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <SelectField
-            label="Calculation method"
+      <Section title="Calculation" description="Changing these refetches the timetable.">
+        <SettingRow label="Calculation method" hint="Sets the sun angles used for Fajr and Isha">
+          <Select
+            className="w-80 max-w-full"
             value={draft.method}
             onChange={(e) => patch({ method: Number(e.target.value) })}
+            aria-label="Calculation method"
           >
             {METHODS.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name}
               </option>
             ))}
-          </SelectField>
-          <SelectField
-            label="Asr calculation"
+          </Select>
+        </SettingRow>
+        <SettingRow label="Asr" hint="Hanafi starts Asr later">
+          <Select
+            className="w-80 max-w-full"
             value={draft.school}
-            onChange={(e) =>
-              patch({ school: Number(e.target.value) === 1 ? 1 : 0 })
-            }
+            onChange={(e) => patch({ school: Number(e.target.value) === 1 ? 1 : 0 })}
+            aria-label="Asr calculation"
           >
             <option value={0}>Standard (Shafi, Maliki, Hanbali)</option>
             <option value={1}>Hanafi</option>
-          </SelectField>
-          <SelectField
-            label="Time format"
+          </Select>
+        </SettingRow>
+        <SettingRow label="Time format">
+          <Select
+            className="w-80 max-w-full"
             value={draft.timeFormat}
-            onChange={(e) =>
-              patch({ timeFormat: e.target.value === "24h" ? "24h" : "12h" })
-            }
+            onChange={(e) => patch({ timeFormat: e.target.value === "24h" ? "24h" : "12h" })}
+            aria-label="Time format"
           >
             <option value="12h">12-hour (5:45 PM)</option>
             <option value="24h">24-hour (17:45)</option>
-          </SelectField>
-        </div>
-      </Card>
+          </Select>
+        </SettingRow>
+      </Section>
 
-      <Card
-        title="Alarms"
-        description="How you get notified when a prayer alarm fires."
-      >
-        <div className="space-y-4">
-          <Row
-            label="System notifications"
-            hint="Notification center / toast"
-          >
-            <Toggle
-              checked={draft.notificationsEnabled}
-              onChange={(v) => patch({ notificationsEnabled: v })}
-            />
-          </Row>
-          <Row label="Alarm sound" hint="Plays until you respond">
-            <Toggle
-              checked={draft.soundEnabled}
-              onChange={(v) => patch({ soundEnabled: v })}
-            />
-          </Row>
-          <Row
-            label="Alarm tone"
-            hint={
-              settings.alarmSound
-                ? `Custom — ${settings.alarmSound} (applies instantly)`
-                : "Default chime"
-            }
-          >
-            <div className="flex items-center gap-2">
-              <Button size="sm" disabled={toneBusy} onClick={() => void chooseTone()}>
-                <FolderOpen className="h-3.5 w-3.5" /> Choose file…
-              </Button>
-              {settings.alarmSound && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={toneBusy}
-                  onClick={() => void useDefaultTone()}
-                >
-                  <Undo2 className="h-3.5 w-3.5" /> Default
-                </Button>
-              )}
-            </div>
-          </Row>
-          {toneError && (
-            <p className="-mt-2 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-xs text-red-300">
-              {toneError}
-            </p>
-          )}
-          <Row label="Alarm popup" hint="Small always-on-top window">
-            <Toggle
-              checked={draft.popupEnabled}
-              onChange={(v) => patch({ popupEnabled: v })}
-            />
-          </Row>
-          <div className="flex items-end gap-3">
-            <div className="flex-1">
-              <SliderField
-                label={`Volume — ${Math.round(draft.soundVolume * 100)}% (applies instantly)`}
-                value={Math.round(draft.soundVolume * 100)}
-                onChange={(e) => changeVolume(Number(e.target.value) / 100)}
-              />
-            </div>
-            <Button size="md" onClick={() => void testSound(draft.soundVolume)}>
-              <Volume2 className="h-4 w-4" /> Test
-            </Button>
-          </div>
-        </div>
-      </Card>
-
-      <Card
-        title="Before-end warning"
-        description="If a prayer still isn't marked done shortly before its window closes, a final “you will miss it” alarm fires."
-      >
-        <div className="flex flex-wrap items-center gap-4">
+      <Section title="Alarms" description="How you're alerted when an alarm rings.">
+        <SettingRow label="System notifications" hint="Shown in your notification center">
           <Toggle
+            label="System notifications"
+            checked={draft.notificationsEnabled}
+            onChange={(v) => patch({ notificationsEnabled: v })}
+          />
+        </SettingRow>
+        <SettingRow label="Alarm popup" hint="Small always-on-top window">
+          <Toggle
+            label="Alarm popup"
+            checked={draft.popupEnabled}
+            onChange={(v) => patch({ popupEnabled: v })}
+          />
+        </SettingRow>
+        <SettingRow label="Alarm sound" hint="Plays until you respond">
+          <Toggle
+            label="Alarm sound"
+            checked={draft.soundEnabled}
+            onChange={(v) => patch({ soundEnabled: v })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Volume"
+          disabled={!draft.soundEnabled}
+        >
+          <div className="flex w-64 items-center gap-3">
+            <SliderField
+              aria-label="Alarm volume"
+              disabled={!draft.soundEnabled}
+              value={Math.round(draft.soundVolume * 100)}
+              onChange={(e) => patch({ soundVolume: Number(e.target.value) / 100 }, 300)}
+            />
+            <span className="tnum w-9 text-right text-[13px] text-slate-400">
+              {Math.round(draft.soundVolume * 100)}%
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void testSound(draft.soundVolume)}
+            aria-label="Play the alarm tone"
+          >
+            <Volume2 className="h-4 w-4" aria-hidden /> Test
+          </Button>
+        </SettingRow>
+        <SettingRow
+          label="Alarm tone"
+          hint={settings.alarmSound ? `Custom: ${settings.alarmSound}` : "Default chime"}
+        >
+          {settings.alarmSound && (
+            <Button size="sm" variant="ghost" disabled={toneBusy} onClick={() => void useDefaultTone()}>
+              <Undo2 className="h-3.5 w-3.5" aria-hidden /> Use default
+            </Button>
+          )}
+          <Button size="sm" disabled={toneBusy} onClick={() => void chooseTone()}>
+            <FolderOpen className="h-3.5 w-3.5" aria-hidden /> Choose file…
+          </Button>
+        </SettingRow>
+        {toneError && (
+          <p role="alert" className="px-4 py-3 text-[13px] text-red-300">
+            {toneError}
+          </p>
+        )}
+      </Section>
+
+      <Section
+        title="Alarm timing"
+        description="Each prayer's alarm rings this many minutes after it starts. Leave the box empty to ring right at the start."
+      >
+        {PRAYERS.map((p) => {
+          const ps = draft.prayerSettings[p];
+          return (
+            <SettingRow
+              key={p}
+              label={PRAYER_LABELS[p]}
+              hint={ps.enabled ? (reminderHint(p) ?? "Alarms on") : "Alarms off"}
+              disabled={!ps.enabled}
+            >
+              <MinutesInput
+                min={1}
+                max={600}
+                allowEmpty
+                placeholder="—"
+                disabled={!ps.enabled}
+                value={ps.reminderMinutes}
+                onCommit={(v) => patchPrayer(p, { reminderMinutes: v }, 600)}
+                aria-label={`Minutes after ${PRAYER_LABELS[p]} starts`}
+              />
+              <Toggle
+                label={`${PRAYER_LABELS[p]} alarms`}
+                checked={ps.enabled}
+                onChange={(v) => patchPrayer(p, { enabled: v })}
+              />
+            </SettingRow>
+          );
+        })}
+        <SettingRow
+          label="Before-end warning"
+          hint="A final alarm if a prayer isn't marked done before its time ends"
+        >
+          <MinutesInput
+            min={1}
+            max={120}
+            disabled={!draft.preEndWarningEnabled}
+            value={draft.preEndWarningMinutes}
+            onCommit={(v) => v !== null && patch({ preEndWarningMinutes: v }, 600)}
+            aria-label="Minutes before the prayer time ends"
+          />
+          <Toggle
+            label="Before-end warning"
             checked={draft.preEndWarningEnabled}
             onChange={(v) => patch({ preEndWarningEnabled: v })}
           />
-          <div className="w-40">
-            <NumberField
-              label="Minutes before end"
-              min={1}
-              max={120}
-              disabled={!draft.preEndWarningEnabled}
-              value={draft.preEndWarningMinutes}
-              onChange={(e) =>
-                patch({ preEndWarningMinutes: clamp(Number(e.target.value), 1, 120) })
-              }
-            />
-          </div>
-        </div>
-      </Card>
+        </SettingRow>
+      </Section>
 
-      <Card
-        title="Per-prayer alarm timing"
-        description="How many minutes AFTER the prayer's start time its alarm fires — e.g. start 11:46 AM with 30 → one single alarm at 12:16 PM (“you still have … minutes”). Clear the number to make the alarm ring exactly at the start time (that's Maghrib's default). The before-end warning below is separate."
-      >
-        <ul className="divide-y divide-slate-800/70">
-          {PRAYERS.map((p) => {
-            const ps = draft.prayerSettings[p];
-            return (
-              <li
-                key={p}
-                className="flex flex-wrap items-center justify-between gap-3 py-3"
-              >
-                <div>
-                  <p
-                    className={cn(
-                      "text-sm font-medium",
-                      ps.enabled ? "text-slate-200" : "text-slate-500",
-                    )}
-                  >
-                    {PRAYER_LABELS[p]}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {ps.enabled
-                      ? (reminderHint(p) ?? "Alarms on")
-                      : "All alarms off"}
-                  </p>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="w-40">
-                    <input
-                      type="number"
-                      min={1}
-                      max={600}
-                      placeholder="Off"
-                      disabled={!ps.enabled}
-                      value={ps.reminderMinutes ?? ""}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        patchPrayer(p, {
-                          reminderMinutes:
-                            raw === "" ? null : clamp(Number(raw), 1, 600),
-                        });
-                      }}
-                      className={cn(
-                        "h-9 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 text-sm text-slate-100",
-                        "placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none disabled:opacity-40",
-                      )}
-                      aria-label={`Reminder minutes after ${PRAYER_LABELS[p]} starts`}
-                    />
-                  </div>
-                  <Toggle
-                    checked={ps.enabled}
-                    onChange={(v) => patchPrayer(p, { enabled: v })}
-                  />
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </Card>
+      <Section title="General">
+        <SettingRow label="Open at login" hint="Starts quietly in the tray when you sign in">
+          <Toggle label="Open at login" checked={autostart} onChange={(v) => void toggleAutostart(v)} />
+        </SettingRow>
+      </Section>
 
-      <Card
+      <Section
         title="Updates"
-        description="Checked automatically at launch. Windows and Linux updates install inside the app; macOS downloads from GitHub."
+        description={
+          IS_MAC
+            ? "Checked at launch. On macOS, updates download from GitHub."
+            : "Checked at launch and installed inside the app."
+        }
       >
-        <div className="space-y-4">
-          <Row
-            label="Current version"
-            hint={updates.currentVersion ? `v${updates.currentVersion}` : undefined}
+        <SettingRow
+          label={updates.currentVersion ? `Version ${updates.currentVersion}` : "Version"}
+          hint={
+            updates.phase === "up-to-date"
+              ? "You're on the latest version"
+              : updates.phase === "downloading"
+                ? "Downloading… the app restarts when ready"
+                : undefined
+          }
+        >
+          <Button
+            size="sm"
+            disabled={updates.phase === "checking" || updates.phase === "downloading"}
+            onClick={() => void updates.checkForUpdates(false)}
           >
-            <Button
-              size="sm"
-              disabled={updates.phase === "checking" || updates.phase === "downloading"}
-              onClick={() => void updates.checkForUpdates(false)}
-            >
-              <RotateCcw
-                className={cn(
-                  "h-3.5 w-3.5",
-                  updates.phase === "checking" && "animate-spin",
-                )}
-              />
-              {updates.phase === "checking" ? "Checking…" : "Check for updates"}
-            </Button>
-          </Row>
-
-          {updates.phase === "available" && (
-            <div className="space-y-3">
-              <p className="text-sm text-slate-300">
-                <span className="font-medium text-emerald-300">v{updates.newVersion}</span> is
-                available
-                {updates.currentVersion ? ` (you have v${updates.currentVersion})` : ""}.
-              </p>
-              {updates.notes && (
-                <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs leading-relaxed text-slate-400">
-                  {updates.notes}
-                </pre>
-              )}
-              {IS_MAC ? (
-                <Button size="sm" variant="primary" onClick={updates.openDownloadPage}>
-                  <ExternalLink className="h-3.5 w-3.5" /> Download from GitHub
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => void updates.install()}
-                >
-                  <Download className="h-3.5 w-3.5" /> Install update
-                </Button>
-              )}
-            </div>
-          )}
-
-          {updates.phase === "downloading" && (
-            <p className="text-sm text-slate-300">
-              Downloading update… the app restarts automatically when ready.
+            <RotateCcw
+              className={cn("h-3.5 w-3.5", updates.phase === "checking" && "animate-spin")}
+              aria-hidden
+            />
+            {updates.phase === "checking" ? "Checking…" : "Check for updates"}
+          </Button>
+        </SettingRow>
+        {updates.phase === "available" && (
+          <div className="space-y-3 px-4 py-4">
+            <p className="text-sm text-slate-200">
+              Version <span className="font-medium text-emerald-300">{updates.newVersion}</span> is
+              available.
             </p>
-          )}
-
-          {updates.phase === "up-to-date" && (
-            <p className="text-sm text-slate-400">You're on the latest version.</p>
-          )}
-
-          {updates.phase === "error" && (
-            <p className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-xs text-red-300">
-              {updates.error}
-            </p>
-          )}
-        </div>
-      </Card>
-
-      <Card title="About">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-slate-400">
-            Developed by <span className="font-medium text-slate-200">Raihan Ali</span>
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => void openUrl("https://github.com/iamraihan/prayer-times")}
-            >
-              <ExternalLink className="h-3.5 w-3.5" /> GitHub
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => void openUrl("https://raihanali.com/prayer-times")}
-            >
-              <ExternalLink className="h-3.5 w-3.5" /> raihanali.com
-            </Button>
+            {updates.notes && (
+              <pre className="max-h-32 overflow-y-auto rounded-lg bg-slate-950/60 p-3 font-sans text-[13px] leading-relaxed whitespace-pre-wrap text-slate-400">
+                {updates.notes}
+              </pre>
+            )}
+            {IS_MAC ? (
+              <Button size="sm" variant="primary" onClick={updates.openDownloadPage}>
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Download from GitHub
+              </Button>
+            ) : (
+              <Button size="sm" variant="primary" onClick={() => void updates.install()}>
+                <Download className="h-3.5 w-3.5" aria-hidden /> Install update
+              </Button>
+            )}
           </div>
+        )}
+        {updates.phase === "error" && (
+          <p role="alert" className="px-4 py-3 text-[13px] text-red-300">
+            {updates.error}
+          </p>
+        )}
+      </Section>
+
+      <footer className="flex flex-wrap items-center justify-between gap-2 px-1 text-[13px] text-slate-500">
+        <p>
+          Prayer Times by <span className="text-slate-300">Raihan Ali</span>
+        </p>
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 hover:text-slate-200"
+            onClick={() => void openUrl("https://github.com/iamraihan/prayer-times")}
+          >
+            GitHub <ExternalLink className="h-3 w-3" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 hover:text-slate-200"
+            onClick={() => void openUrl("https://raihanali.com/prayer-times")}
+          >
+            raihanali.com <ExternalLink className="h-3 w-3" aria-hidden />
+          </button>
         </div>
-      </Card>
+      </footer>
 
       {changingLocation && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/90 p-4">
-          <SetupWizard onFinished={() => setChangingLocation(false)} />
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/95">
+          <SetupWizard onFinished={() => setChangingLocation(false)} onCancel={() => setChangingLocation(false)} />
         </div>
       )}
 
       {toast && <Toast toast={toast} onDismiss={() => setToast(null)} />}
     </div>
   );
-}
-
-function Row({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <div>
-        <p className="text-sm text-slate-200">{label}</p>
-        {hint && <p className="text-xs text-slate-500">{hint}</p>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  if (!Number.isFinite(v)) return lo;
-  return Math.min(hi, Math.max(lo, Math.round(v)));
 }
 
 // Every Settings field, checked by the compiler: adding a field to
@@ -604,18 +518,99 @@ function keepEdit<K extends keyof Settings>(
   if (!sameJson(draft[key], prev[key])) out[key] = draft[key];
 }
 
-// Key-order-insensitive: `prayerSettings` comes from a Rust HashMap whose
-// iteration order can change after each save, which must not count as an edit.
+// Settings serialize from Rust structs, so key order is fixed and a plain
+// JSON comparison is exact.
 function sameJson(a: unknown, b: unknown): boolean {
-  return stableJson(a) === stableJson(b);
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function stableJson(v: unknown): string {
-  return JSON.stringify(v, (_k, val: unknown) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(
-          Object.entries(val as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
-        )
-      : val,
+function SaveStatus({
+  state,
+  onRetry,
+}: {
+  state: "idle" | "saving" | "saved" | "error";
+  onRetry: () => void;
+}) {
+  return (
+    <p aria-live="polite" className="flex items-center gap-1.5 text-[13px] text-slate-500">
+      {state === "saving" && (
+        <>
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> Saving…
+        </>
+      )}
+      {state === "saved" && (
+        <>
+          <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden /> All changes saved
+        </>
+      )}
+      {state === "error" && (
+        <>
+          <span className="text-red-300">Not saved.</span>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="text-slate-300 underline underline-offset-2 hover:text-slate-100"
+          >
+            Retry
+          </button>
+        </>
+      )}
+    </p>
+  );
+}
+
+/**
+ * Minutes box that keeps whatever is typed and only commits valid values
+ * (whole numbers in range, or empty when `allowEmpty`). Leaving the box
+ * shows the last committed value again, so a half-typed or out-of-range
+ * entry never gets saved.
+ */
+function MinutesInput({
+  value,
+  min,
+  max,
+  allowEmpty,
+  onCommit,
+  ...rest
+}: {
+  value: number | null;
+  min: number;
+  max: number;
+  allowEmpty?: boolean;
+  onCommit: (value: number | null) => void;
+} & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "min" | "max">) {
+  const shown = value === null ? "" : String(value);
+  const [text, setText] = useState(shown);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setText(shown);
+  }, [shown]);
+
+  function parse(raw: string): number | null | undefined {
+    const t = raw.trim();
+    if (t === "") return allowEmpty ? null : undefined;
+    const n = Number(t);
+    return Number.isInteger(n) && n >= min && n <= max ? n : undefined;
+  }
+
+  return (
+    <UnitInput
+      unit="min"
+      min={min}
+      max={max}
+      value={text}
+      aria-invalid={parse(text) === undefined}
+      onFocus={() => (focused.current = true)}
+      onBlur={() => {
+        focused.current = false;
+        setText(shown);
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = parse(e.target.value);
+        if (v !== undefined) onCommit(v);
+      }}
+      {...rest}
+    />
   );
 }

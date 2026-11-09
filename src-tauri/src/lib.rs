@@ -17,6 +17,7 @@ mod alarm;
 mod aladhan;
 mod commands;
 mod engine;
+mod geocode;
 mod models;
 mod runtime;
 mod schedule;
@@ -24,6 +25,7 @@ mod settings;
 mod sound;
 mod timeutil;
 mod tray;
+mod tzcountry;
 mod windows;
 
 use std::sync::{Arc, Condvar, Mutex};
@@ -93,6 +95,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
+            commands::search_cities,
             commands::preview_location,
             commands::save_location,
             commands::update_settings,

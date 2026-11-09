@@ -1,11 +1,14 @@
-import { CalendarClock, Hourglass } from "lucide-react";
+import { CheckCheck, CloudOff, Loader2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { useAppState, useNow } from "../store/useAppStore";
-import { PRAYER_EMOJIS, PRAYER_LABELS } from "../lib/types";
-import { countdown, fmtHM, type TimeFormat } from "../lib/time";
+import { PRAYER_LABELS } from "../lib/types";
+import { countdown, fmtInstant } from "../lib/time";
+import { PrayerIcon } from "./PrayerIcon";
+import { cn } from "../lib/cn";
 
 /**
- * The hero card: current prayer window (countdown to its end) or the next
- * upcoming prayer (countdown to its start).
+ * The featured prayer: the open window (countdown to its end) or the next
+ * one to begin (countdown to its start).
  */
 export function NextPrayerCard() {
   const state = useAppState();
@@ -13,96 +16,118 @@ export function NextPrayerCard() {
 
   if (!state?.today) {
     return (
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-center">
-        <p className="text-sm text-slate-400">
-          {state?.apiError
-            ? "Can't reach the prayer times service. Retrying in the background…"
-            : "Loading today's prayer times…"}
-        </p>
-      </div>
+      <Shell>
+        <Quiet
+          icon={
+            state?.apiError ? (
+              <CloudOff className="h-5 w-5" aria-hidden />
+            ) : (
+              <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+            )
+          }
+          title={state?.apiError ? "Can't reach the prayer times service" : "Loading today's times…"}
+          detail={state?.apiError ? "Retrying in the background." : undefined}
+        />
+      </Shell>
     );
   }
 
   const next = state.next;
   if (!next) {
     return (
-      <div className="rounded-2xl border border-emerald-800/50 bg-emerald-950/30 p-6 text-center">
-        <p className="text-lg font-medium text-emerald-300">
-          All prayers are done for today 🎉
-        </p>
-        <p className="mt-1 text-sm text-slate-400">
-          Times for tomorrow will appear after midnight.
-        </p>
-      </div>
+      <Shell>
+        <Quiet
+          icon={<CheckCheck className="h-5 w-5 text-emerald-400" aria-hidden />}
+          title="All of today's prayers are done"
+          detail="Tomorrow's times appear after Isha ends."
+        />
+      </Shell>
     );
   }
 
-  const mode: TimeFormat = state.settings.timeFormat === "24h" ? "24h" : "12h";
-  const startMs = new Date(next.startAt).getTime();
-  const endMs = new Date(next.endsAt).getTime();
+  const mode = state.settings.timeFormat;
+  const startMs = Date.parse(next.startAt);
+  const endMs = Date.parse(next.endsAt);
   const isCurrent = now >= startMs && now < endMs;
-  const targetMs = isCurrent ? endMs : startMs;
-  const remaining = countdown(targetMs - now);
-
-  // Progress through the current prayer window.
+  const remaining = countdown((isCurrent ? endMs : startMs) - now);
   const progress = isCurrent
     ? Math.min(1, Math.max(0, (now - startMs) / Math.max(1, endMs - startMs)))
     : 0;
+  const label = PRAYER_LABELS[next.prayer];
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-br from-emerald-950/40 via-slate-900/60 to-slate-900/60">
-      <div className="p-6">
-        <p className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-          {isCurrent ? "Current prayer" : "Next prayer"}
-        </p>
-        <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="text-4xl">{PRAYER_EMOJIS[next.prayer]}</span>
-            <div>
-              <h2 className="text-3xl font-semibold leading-tight">
-                {PRAYER_LABELS[next.prayer]}
-              </h2>
-              <p className="mt-0.5 font-mono text-sm text-slate-300">
-                starts {fmtHM(hmOfDay(next.startAt), mode)} · ends{" "}
-                {fmtHM(hmOfDay(next.endsAt), mode)}
-              </p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="font-mono text-3xl font-semibold tabular-nums text-emerald-300">
-              {remaining}
-            </p>
-            <p className="mt-0.5 flex items-center justify-end gap-1 text-xs text-slate-400">
-              {isCurrent ? (
-                <>
-                  <Hourglass className="h-3.5 w-3.5" /> until it ends
-                </>
-              ) : (
-                <>
-                  <CalendarClock className="h-3.5 w-3.5" /> until it starts
-                </>
-              )}
-            </p>
-          </div>
+    <Shell current={isCurrent}>
+      <div className="flex items-center gap-4 p-5 sm:p-6">
+        <span
+          className={cn(
+            "flex h-12 w-12 shrink-0 items-center justify-center rounded-full",
+            isCurrent ? "bg-emerald-400/10 text-emerald-300" : "bg-slate-800 text-slate-300",
+          )}
+        >
+          <PrayerIcon prayer={next.prayer} className="h-6 w-6" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-2xl font-semibold tracking-[-0.015em] text-slate-50">{label}</h2>
+          <p className="tnum mt-0.5 text-sm text-slate-400">
+            {fmtInstant(next.startAt, mode)} – {fmtInstant(next.endsAt, mode)}
+          </p>
         </div>
-        {isCurrent && (
-          <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-slate-800">
-            <div
-              className="h-full rounded-full bg-emerald-500 transition-all"
-              style={{ width: `${progress * 100}%` }}
-            />
-          </div>
-        )}
+        <div className="text-right" aria-live="off">
+          <p
+            className={cn(
+              "tnum text-2xl font-semibold tracking-[-0.015em]",
+              isCurrent ? "text-emerald-300" : "text-slate-50",
+            )}
+          >
+            {remaining}
+          </p>
+          <p className="mt-0.5 text-[13px] text-slate-400">
+            {isCurrent ? "left to pray" : `until ${label}`}
+          </p>
+        </div>
       </div>
-    </div>
+      {isCurrent && (
+        <div
+          className="h-[3px] bg-slate-800"
+          role="progressbar"
+          aria-label={`${label} window elapsed`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress * 100)}
+        >
+          <div
+            className="h-full bg-emerald-400/80 transition-[width] duration-1000 ease-linear"
+            style={{ width: `${progress * 100}%` }}
+          />
+        </div>
+      )}
+    </Shell>
   );
 }
 
-/** "HH:MM" for an ISO string in the location's timezone (already offset-encoded). */
-function hmOfDay(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "--:--";
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
+function Shell({ current, children }: { current?: boolean; children: ReactNode }) {
+  return (
+    <section
+      className={cn(
+        "overflow-hidden rounded-xl border bg-slate-900/70",
+        current ? "border-emerald-400/20" : "border-slate-800/80",
+      )}
+    >
+      {children}
+    </section>
+  );
+}
+
+function Quiet({ icon, title, detail }: { icon: ReactNode; title: string; detail?: string | undefined }) {
+  return (
+    <div className="flex items-center gap-4 p-5 sm:p-6">
+      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-slate-800 text-slate-400">
+        {icon}
+      </span>
+      <div>
+        <p className="font-medium text-slate-100">{title}</p>
+        {detail && <p className="mt-0.5 text-[13px] text-slate-400">{detail}</p>}
+      </div>
+    </div>
+  );
 }

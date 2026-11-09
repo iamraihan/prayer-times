@@ -1,5 +1,5 @@
 # Quick sanity gate for every push / PR: the frontend builds and the Rust
-# backend type-checks on all three platforms.
+# backend type-checks and passes its unit tests on all three platforms.
 name: CI
 
 on:
@@ -43,3 +43,24 @@ jobs:
 
       - name: Type-check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      # Regenerate the ts-rs bindings from scratch so a deleted or renamed
+      # Rust type shows up as a deleted file in the check below.
+      - name: Clear generated TypeScript bindings
+        if: runner.os == 'Linux'
+        run: rm -rf src/lib/bindings
+
+      # Run from src-tauri/ so cargo picks up src-tauri/.cargo/config.toml
+      # (it tells ts-rs where to write the TypeScript bindings).
+      - name: Rust unit tests
+        working-directory: src-tauri
+        run: cargo test
+
+      # `cargo test` regenerates src/lib/bindings from the Rust DTOs (ts-rs).
+      # Any diff means someone changed a Rust type without committing the
+      # regenerated TypeScript.
+      - name: TypeScript bindings are up to date
+        if: runner.os == 'Linux'
+        run: |
+          git add -N src/lib/bindings
+          git diff --exit-code -- src/lib/bindings
