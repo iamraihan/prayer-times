@@ -11,6 +11,8 @@ export type { AlarmKind } from "./bindings/AlarmKind";
 export type { AsrSchool } from "./bindings/AsrSchool";
 export type { TimeFormat } from "./bindings/TimeFormat";
 export type { Location } from "./bindings/Location";
+export type { Coordinates } from "./bindings/Coordinates";
+export type { CityMatchDto as CityMatch } from "./bindings/CityMatchDto";
 export type { Settings } from "./bindings/Settings";
 export type { PreviewRequest } from "./bindings/PreviewRequest";
 export type { PrayerSettings as PrayerReminderSettings } from "./bindings/PrayerSettings";

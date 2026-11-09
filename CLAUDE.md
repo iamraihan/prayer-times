@@ -18,4 +18,5 @@ Rust is the single source of truth for every shape that crosses IPC.
 
 - Scheduling decisions live in `src-tauri/src/schedule.rs` as pure functions that take `now` as a parameter, unit-tested in the same file. Put new decision logic there and keep `engine.rs` to applying decisions and side effects (sound, tray, windows, disk).
 - Every bug fix in time or schedule logic starts with a failing test that reproduces it: a DST gap or overlap, Isha past midnight, the 1st of a month, a location timezone different from the device's.
+- Code that talks to the Aladhan or Open-Meteo APIs gets `#[ignore = "network"]` tests next to it (see `commands::network_tests`); run them with `cargo test -- --ignored` after changing a request. CI runs only the offline tests.
 - Before finishing: `cargo test` (in `src-tauri/`) and `pnpm build` (runs `tsc`) both pass, and `src/lib/bindings/` has no uncommitted diff.

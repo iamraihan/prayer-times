@@ -5,7 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A cross-platform (Windows, macOS, Ubuntu/Linux) prayer-times app built with
-Tauri 2, using the [Aladhan API](https://aladhan.com/prayer-times-api).
+Tauri 2, using the [Aladhan API](https://aladhan.com/prayer-times-api) for
+prayer times and the [Open-Meteo geocoding API](https://open-meteo.com/en/docs/geocoding-api)
+for city search.
 
 **Website:** [raihanali.com/prayer-times](https://raihanali.com/prayer-times) —
 feature overview and downloads for Windows, macOS & Linux.
@@ -15,7 +17,8 @@ feature overview and downloads for Windows, macOS & Linux.
   indicator). Left-click the tray icon to open the app; closing the window
   keeps the app running in the tray.
 - **Alarms that follow the whole prayer window** — see the table below.
-- **First-run wizard** — pick country + city, calculation method and Asr
+- **First-run wizard** — pick a country, then search and pick your city (times
+  are calculated for its exact coordinates), calculation method and Asr
   school; a live preview is fetched before anything is saved.
 - **Offline-friendly** — each month's timetable is cached on disk
   (one API call per month in the happy path).

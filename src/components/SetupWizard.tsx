@@ -3,12 +3,13 @@ import { ArrowLeft, ArrowRight, Check, MapPin } from "lucide-react";
 import logo from "../assets/logo.png";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
-import { SelectField, TextField } from "./ui/fields";
+import { SelectField } from "./ui/fields";
 import { CountryPicker } from "./CountryPicker";
+import { CityPicker, cityLabel, type CityChoice } from "./CityPicker";
 import type { Country } from "../lib/countries";
 import { METHODS, METHOD_BY_COUNTRY } from "../lib/methods";
 import { previewLocation, saveLocation } from "../lib/actions";
-import type { DayTimings, LocationPreview } from "../lib/types";
+import type { AsrSchool, DayTimings, LocationPreview } from "../lib/types";
 import { PRAYERS, PRAYER_EMOJIS, PRAYER_LABELS } from "../lib/types";
 import { fmtHM } from "../lib/time";
 import { cn } from "../lib/cn";
@@ -28,9 +29,9 @@ export function SetupWizard({ onFinished }: SetupWizardProps) {
   const [step, setStep] = useState(0);
 
   const [country, setCountry] = useState<Country | null>(null);
-  const [city, setCity] = useState("");
+  const [city, setCity] = useState<CityChoice | null>(null);
   const [method, setMethod] = useState<number>(3);
-  const [school, setSchool] = useState<0 | 1>(0);
+  const [school, setSchool] = useState<AsrSchool>(0);
 
   const [preview, setPreview] = useState<LocationPreview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,20 +44,22 @@ export function SetupWizard({ onFinished }: SetupWizardProps) {
     if (c) setMethod(METHOD_BY_COUNTRY[c.code] ?? 3);
   }
 
-  const locationReady = Boolean(country) && city.trim().length > 0;
+  const locationReady = Boolean(country) && city !== null;
 
   // Fetch the preview whenever the confirm step is entered.
   useEffect(() => {
-    if (step !== 2 || !country) return;
+    if (step !== 2 || !country || !city) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setPreview(null);
     previewLocation({
-      city: city.trim(),
+      city: city.kind === "picked" ? city.match.name : city.name,
       country: country.name,
       countryCode: country.code,
       method,
       school,
+      picked: city.kind === "picked" ? city.match : null,
     })
       .then((p) => {
         if (!cancelled) setPreview(p);
@@ -128,15 +131,16 @@ export function SetupWizard({ onFinished }: SetupWizardProps) {
                 </label>
                 <CountryPicker value={country} onChange={handleCountryChange} />
               </div>
-              <TextField
-                label="City"
-                placeholder="e.g. Dhaka"
+              <CityPicker
+                countryCode={country?.code ?? null}
+                countryName={country?.name ?? null}
                 value={city}
-                onChange={(e) => setCity(e.target.value)}
+                onChange={setCity}
               />
               <p className="text-xs leading-relaxed text-slate-500">
-                Times are looked up by city on the Aladhan network service. If
-                your city isn't found, try the nearest larger city.
+                Pick your city from the list so times are calculated for its
+                exact position. If your town isn't listed, pick the nearest
+                one.
               </p>
             </div>
           )}
@@ -158,7 +162,7 @@ export function SetupWizard({ onFinished }: SetupWizardProps) {
                 label="Asr calculation"
                 hint="Hanafi uses the later Asr time"
                 value={school}
-                onChange={(e) => setSchool(Number(e.target.value) as 0 | 1)}
+                onChange={(e) => setSchool(Number(e.target.value) === 1 ? 1 : 0)}
               >
                 <option value={0}>Standard (Shafi, Maliki, Hanbali)</option>
                 <option value={1}>Hanafi</option>
@@ -174,7 +178,8 @@ export function SetupWizard({ onFinished }: SetupWizardProps) {
             <div className="fade-in space-y-4">
               {loading && (
                 <p className="py-6 text-center text-sm text-slate-400">
-                  Fetching today's times for {city.trim()}…
+                  Fetching today's times for{" "}
+                  {city?.kind === "picked" ? cityLabel(city.match) : city?.name}…
                 </p>
               )}
               {!loading && preview && (
@@ -232,7 +237,9 @@ function PreviewResult({ preview }: { preview: LocationPreview }) {
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-sm text-slate-300">
         <MapPin className="h-4 w-4 text-emerald-400" />
-        {preview.location.city}, {preview.location.country}
+        {preview.location.region
+          ? `${preview.location.city}, ${preview.location.region}, ${preview.location.country}`
+          : `${preview.location.city}, ${preview.location.country}`}
         <span className="text-xs text-slate-500">
           ({preview.location.timezone})
         </span>

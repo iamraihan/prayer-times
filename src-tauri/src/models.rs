@@ -66,6 +66,20 @@ pub struct Location {
     pub country_code: String,
     /// IANA timezone of the location (times are interpreted in this zone).
     pub timezone: String,
+    /// State / province of a city picked from search (display only).
+    pub region: Option<String>,
+    /// Exact position of a city picked from search; times are then fetched
+    /// by coordinates. `None` for locations typed by name (older versions,
+    /// or a town the search doesn't know) — those are looked up by name.
+    pub coordinates: Option<Coordinates>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct Coordinates {
+    pub latitude: f64,
+    pub longitude: f64,
 }
 
 /// Juristic rule for when Asr starts. Numeric on the wire and in cache file
@@ -366,6 +380,10 @@ pub struct AppStateDto {
     pub snoozes: HashMap<Prayer, String>,
     pub active_alarm: Option<ActiveAlarmDto>,
     pub api_error: Option<String>,
+    /// Set when the saved location looks wrong (a typed city name that the
+    /// API matched to a place in another country); the UI asks the user to
+    /// pick their city again.
+    pub location_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -385,6 +403,23 @@ pub struct PreviewRequest {
     pub country_code: String,
     pub method: u8,
     pub school: AsrSchool,
+    /// The search result the user picked; `None` = look the city up by name.
+    pub picked: Option<CityMatchDto>,
+}
+
+/// One city search result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct CityMatchDto {
+    pub name: String,
+    /// State / province, e.g. "West Bengal".
+    pub region: Option<String>,
+    pub country_code: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub timezone: String,
+    pub population: Option<u32>,
 }
 
 #[cfg(test)]
@@ -424,6 +459,32 @@ mod tests {
         assert_eq!(s.location.unwrap().city, "Dhaka");
         assert_eq!(s.method, 1);
         assert_eq!(s.pre_end_warning_minutes, 10);
+    }
+
+    #[test]
+    fn locations_saved_before_city_search_still_load() {
+        let json = r#"{"location":{"city":"Dhaka","country":"Bangladesh",
+            "countryCode":"BD","timezone":"Asia/Dhaka"}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        let loc = s.location.unwrap();
+        assert_eq!(loc.region, None);
+        assert_eq!(loc.coordinates, None);
+    }
+
+    #[test]
+    fn picked_location_round_trips() {
+        let loc = Location {
+            city: "Kolkata".into(),
+            country: "India".into(),
+            country_code: "IN".into(),
+            timezone: "Asia/Kolkata".into(),
+            region: Some("West Bengal".into()),
+            coordinates: Some(Coordinates { latitude: 22.56263, longitude: 88.36304 }),
+        };
+        let json = serde_json::to_string(&loc).unwrap();
+        assert!(json.contains(r#""coordinates":{"latitude":22.56263,"longitude":88.36304}"#));
+        let back: Location = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.coordinates, loc.coordinates);
     }
 
     #[test]

@@ -78,10 +78,22 @@ pub struct NextInfo {
 pub struct FetchJob {
     pub key: (i32, u32),
     pub client: reqwest::blocking::Client,
-    pub city: String,
-    pub country: String,
+    pub location: Location,
     pub method: u8,
     pub school: AsrSchool,
+    /// What the result belongs to (`FetchParams::cache_id`). The result is
+    /// dropped if the location/method/school changed while it was in flight.
+    pub cache_id: String,
+}
+
+impl FetchJob {
+    pub fn params(&self) -> aladhan::FetchParams<'_> {
+        aladhan::FetchParams {
+            place: aladhan::Place::of(&self.location),
+            method: self.method,
+            school: self.school,
+        }
+    }
 }
 
 pub struct Engine {
@@ -291,6 +303,7 @@ impl Engine {
     pub fn snapshot(&self) -> AppStateDto {
         let settings = self.settings.clone();
         let has_location = settings.location.is_some();
+        let location_warning = settings.location.as_ref().and_then(location_warning);
         let mut today_dto = None;
         let mut next_dto = None;
 
@@ -332,6 +345,7 @@ impl Engine {
                 message: a.message.clone(),
             }),
             api_error: self.last_error.clone(),
+            location_warning,
         }
     }
 
@@ -358,18 +372,13 @@ impl Engine {
             }
         }
 
+        let cache_id = self.cache_id(&location);
         let mut jobs = Vec::new();
         for key in keys {
             if self.months.contains_key(&key) {
                 continue;
             }
-            if let Some(cache) = aladhan::load_month(
-                &self.cache_dir,
-                self.settings.method,
-                self.settings.school,
-                key.0,
-                key.1,
-            ) {
+            if let Some(cache) = aladhan::load_month(&self.cache_dir, &cache_id, key.0, key.1) {
                 self.months.insert(key, cache);
                 continue;
             }
@@ -385,28 +394,45 @@ impl Engine {
             jobs.push(FetchJob {
                 key,
                 client: self.client.clone(),
-                city: location.city.clone(),
-                country: location.country_code.clone(),
+                location: location.clone(),
                 method: self.settings.method,
                 school: self.settings.school,
+                cache_id: cache_id.clone(),
             });
         }
         jobs
     }
 
-    pub fn store_month(&mut self, key: (i32, u32), cache: aladhan::MonthCache) {
-        aladhan::save_month(
-            &self.cache_dir,
-            &cache,
-            self.settings.method,
-            self.settings.school,
-        );
-        self.months.insert(key, cache);
+    fn cache_id(&self, location: &Location) -> String {
+        aladhan::FetchParams {
+            place: aladhan::Place::of(location),
+            method: self.settings.method,
+            school: self.settings.school,
+        }
+        .cache_id()
+    }
+
+    /// Whether a finished fetch still matches the current settings.
+    fn is_current(&self, job_cache_id: &str) -> bool {
+        self.settings
+            .location
+            .as_ref()
+            .is_some_and(|l| self.cache_id(l) == job_cache_id)
+    }
+
+    pub fn store_month(&mut self, job: &FetchJob, cache: aladhan::MonthCache) {
+        if !self.is_current(&job.cache_id) {
+            return;
+        }
+        aladhan::save_month(&self.cache_dir, &job.cache_id, &cache);
+        self.months.insert(job.key, cache);
         self.last_error = None;
     }
 
-    pub fn note_fetch_error(&mut self, error: String) {
-        self.last_error = Some(error);
+    pub fn note_fetch_error(&mut self, job: &FetchJob, error: String) {
+        if self.is_current(&job.cache_id) {
+            self.last_error = Some(error);
+        }
     }
 
     // -- the tick ----------------------------------------------------------
@@ -816,11 +842,30 @@ fn short_remaining(target: DateTime<Tz>, now: DateTime<Tz>) -> String {
     }
 }
 
-fn location_key(settings: &Settings) -> Option<(String, String)> {
-    settings
-        .location
-        .as_ref()
-        .map(|l| (l.city.clone(), l.country_code.clone()))
+/// Identity of the saved location: changing any of it refetches the schedule.
+fn location_key(settings: &Settings) -> Option<String> {
+    settings.location.as_ref().map(|l| {
+        let params = aladhan::FetchParams {
+            place: aladhan::Place::of(l),
+            method: 0,
+            school: AsrSchool::Standard,
+        };
+        params.cache_id()
+    })
+}
+
+/// A typed city name that the API matched to a place in another country
+/// ("Londn, United Kingdom" → America/New_York) gives wrong times silently;
+/// flag it so the user re-picks the city from search.
+pub fn location_warning(location: &Location) -> Option<String> {
+    match crate::tzcountry::zone_in_country(&location.timezone, &location.country_code) {
+        Some(false) => Some(format!(
+            "“{}” was matched to a place in the {} timezone, which isn't in {}, so these \
+             times are probably for the wrong place. Pick your city again in Settings → Location.",
+            location.city, location.timezone, location.country
+        )),
+        _ => None,
+    }
 }
 
 /// Builds the wire format for one day. With `tz`, each prayer also carries
@@ -887,14 +932,8 @@ pub fn run_loop(app: AppHandle, wake: Arc<(Mutex<bool>, Condvar)>) {
 
         let mut results = Vec::new();
         for job in jobs {
-            let params = aladhan::FetchParams {
-                city: &job.city,
-                country: &job.country,
-                method: job.method,
-                school: job.school,
-            };
-            let result = aladhan::fetch_month(&job.client, &params, job.key.0, job.key.1);
-            results.push((job.key, result));
+            let result = aladhan::fetch_month(&job.client, &job.params(), job.key.0, job.key.1);
+            results.push((job, result));
         }
 
         {
@@ -902,10 +941,10 @@ pub fn run_loop(app: AppHandle, wake: Arc<(Mutex<bool>, Condvar)>) {
             let Ok(mut engine) = shared.engine.lock() else {
                 break;
             };
-            for (key, result) in results {
+            for (job, result) in results {
                 match result {
-                    Ok(cache) => engine.store_month(key, cache),
-                    Err(e) => engine.note_fetch_error(e),
+                    Ok(cache) => engine.store_month(&job, cache),
+                    Err(e) => engine.note_fetch_error(&job, e),
                 }
             }
             engine.tick();
@@ -925,5 +964,51 @@ pub fn run_loop(app: AppHandle, wake: Arc<(Mutex<bool>, Condvar)>) {
                 *flag = false;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn typed(city: &str, country: &str, code: &str, timezone: &str) -> Location {
+        Location {
+            city: city.to_string(),
+            country: country.to_string(),
+            country_code: code.to_string(),
+            timezone: timezone.to_string(),
+            region: None,
+            coordinates: None,
+        }
+    }
+
+    #[test]
+    fn warns_when_typed_city_landed_in_another_country() {
+        let londn = typed("Londn", "United Kingdom", "GB", "America/New_York");
+        let warning = location_warning(&londn).unwrap();
+        assert!(warning.contains("Londn") && warning.contains("America/New_York"));
+        assert!(location_warning(&typed("Mumbai", "Bangladesh", "BD", "Asia/Kolkata")).is_some());
+    }
+
+    #[test]
+    fn no_warning_for_matching_or_unknown_zones() {
+        assert!(location_warning(&typed("London", "United Kingdom", "GB", "Europe/London")).is_none());
+        assert!(location_warning(&typed("Dhaka", "Bangladesh", "BD", "Asia/Dhaka")).is_none());
+        assert!(location_warning(&typed("Kolkata", "India", "IN", "Asia/Calcutta")).is_none());
+    }
+
+    #[test]
+    fn location_key_changes_with_city_or_coordinates() {
+        let mut a = Settings::default();
+        a.location = Some(typed("Dhaka", "Bangladesh", "BD", "Asia/Dhaka"));
+        let mut b = a.clone();
+        assert_eq!(location_key(&a), location_key(&b));
+        if let Some(l) = b.location.as_mut() {
+            l.coordinates = Some(crate::models::Coordinates {
+                latitude: 23.7104,
+                longitude: 90.40744,
+            });
+        }
+        assert_ne!(location_key(&a), location_key(&b));
     }
 }

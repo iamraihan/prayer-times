@@ -1,4 +1,4 @@
-import { CloudOff, MapPin } from "lucide-react";
+import { CloudOff, MapPin, TriangleAlert } from "lucide-react";
 import { useAppState } from "../store/useAppStore";
 import { NextPrayerCard } from "../components/NextPrayerCard";
 import { PrayerList } from "../components/PrayerList";
@@ -43,6 +43,16 @@ export function TodayPage() {
           )}
         </div>
       </header>
+
+      {state?.locationWarning && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-xl border border-amber-900/60 bg-amber-950/40 px-4 py-3 text-sm text-amber-300"
+        >
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>{state.locationWarning}</p>
+        </div>
+      )}
 
       {snoozes.length > 0 && (
         <div className="flex flex-wrap gap-2">

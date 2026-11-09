@@ -6,7 +6,9 @@
 //!
 //! Endpoint quirks handled here:
 //! - times may carry a suffix like " (+06)" or " (EET)" → stripped when parsing
-//! - `timingsByCity` returns placeholder coordinates, so lookups stay city-based
+//! - the *ByCity endpoints geocode a free-typed name and return placeholder
+//!   coordinates, so the matched place can't be shown; a city picked from
+//!   search (`geocode.rs`) is fetched by exact coordinates instead
 //! - the envelope-level `meta` is null; the timezone lives in each day's
 //!   `data.meta.timezone`
 
@@ -16,7 +18,7 @@ use std::path::{Path, PathBuf};
 use chrono::{Datelike, NaiveDate, NaiveTime};
 use serde::{Deserialize, Serialize};
 
-use crate::models::{AsrSchool, Prayer};
+use crate::models::{AsrSchool, Coordinates, Location, Prayer};
 
 pub const BASE: &str = "https://api.aladhan.com/v1";
 
@@ -120,12 +122,97 @@ pub struct MonthCache {
     pub days: BTreeMap<u32, DayTimings>,
 }
 
+/// Where to calculate times for.
+#[derive(Debug, Clone, Copy)]
+pub enum Place<'a> {
+    /// A free-typed city name; Aladhan geocodes it (may guess wrong).
+    City {
+        city: &'a str,
+        /// ISO alpha-2 country code
+        country: &'a str,
+    },
+    /// Exact position of a city picked from search, in a known timezone.
+    Coordinates {
+        coordinates: Coordinates,
+        timezone: &'a str,
+    },
+}
+
+impl<'a> Place<'a> {
+    pub fn of(location: &'a Location) -> Self {
+        match location.coordinates {
+            Some(coordinates) => Place::Coordinates {
+                coordinates,
+                timezone: &location.timezone,
+            },
+            None => Place::City {
+                city: &location.city,
+                country: &location.country_code,
+            },
+        }
+    }
+}
+
 pub struct FetchParams<'a> {
-    pub city: &'a str,
-    /// ISO alpha-2 country code
-    pub country: &'a str,
+    pub place: Place<'a>,
     pub method: u8,
     pub school: AsrSchool,
+}
+
+impl FetchParams<'_> {
+    /// (endpoint for a month, endpoint for one day) — without the date part.
+    fn endpoints(&self) -> (&'static str, &'static str) {
+        match self.place {
+            Place::City { .. } => ("calendarByCity", "timingsByCity"),
+            Place::Coordinates { .. } => ("calendar", "timings"),
+        }
+    }
+
+    fn query(&self) -> Vec<(&'static str, String)> {
+        let mut q = match self.place {
+            Place::City { city, country } => vec![
+                ("city", city.to_string()),
+                ("country", country.to_string()),
+            ],
+            Place::Coordinates {
+                coordinates,
+                timezone,
+            } => vec![
+                ("latitude", coordinates.latitude.to_string()),
+                ("longitude", coordinates.longitude.to_string()),
+                ("timezonestring", timezone.to_string()),
+            ],
+        };
+        q.push(("method", self.method.to_string()));
+        q.push(("school", self.school.to_string()));
+        q
+    }
+
+    /// Identifies these parameters in the month cache file name, so a cache
+    /// written for one location (or method/school) is never read for another.
+    pub fn cache_id(&self) -> String {
+        let place = match self.place {
+            Place::City { city, country } => {
+                format!("city:{}|{}", city.trim().to_lowercase(), country.to_lowercase())
+            }
+            Place::Coordinates {
+                coordinates,
+                timezone,
+            } => format!(
+                "coords:{:.4},{:.4}|{timezone}",
+                coordinates.latitude, coordinates.longitude
+            ),
+        };
+        format!("{}-{}-{:016x}", self.method, self.school, fnv1a(place.as_bytes()))
+    }
+}
+
+/// 64-bit FNV-1a: a tiny hash that, unlike `DefaultHasher`, is stable
+/// across Rust versions (cache file names must not change on upgrade).
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, b| {
+        (hash ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 /// "17:46 (+06)" / "17:46 (EET)" / "17:46" → NaiveTime
@@ -175,15 +262,10 @@ pub fn fetch_month(
     year: i32,
     month: u32,
 ) -> Result<MonthCache, String> {
-    let url = format!("{BASE}/calendarByCity/{year}/{month}");
+    let url = format!("{BASE}/{}/{year}/{month}", params.endpoints().0);
     let resp: Envelope<Vec<RawDay>> = client
         .get(url.as_str())
-        .query(&[
-            ("city", params.city.to_string()),
-            ("country", params.country.to_string()),
-            ("method", params.method.to_string()),
-            ("school", params.school.to_string()),
-        ])
+        .query(&params.query())
         .send()
         .map_err(|e| format!("network error: {e}"))?
         .error_for_status()
@@ -198,10 +280,12 @@ pub fn fetch_month(
         }
     }
     if days.is_empty() {
-        return Err(format!(
-            "empty calendar for {month}/{year} (city '{}' not recognized?)",
-            params.city
-        ));
+        return Err(match params.place {
+            Place::City { city, .. } => {
+                format!("empty calendar for {month}/{year} (city '{city}' not recognized?)")
+            }
+            Place::Coordinates { .. } => format!("empty calendar for {month}/{year}"),
+        });
     }
 
     Ok(MonthCache {
@@ -218,25 +302,21 @@ pub fn fetch_month(
     })
 }
 
-pub fn fetch_day_by_city(
+pub fn fetch_day(
     client: &reqwest::blocking::Client,
     params: &FetchParams<'_>,
     date: NaiveDate,
 ) -> Result<(DayTimings, String), String> {
     let url = format!(
-        "{BASE}/timingsByCity/{:02}-{:02}-{}",
+        "{BASE}/{}/{:02}-{:02}-{}",
+        params.endpoints().1,
         date.day(),
         date.month(),
         date.year()
     );
     let resp: Envelope<RawDay> = client
         .get(url.as_str())
-        .query(&[
-            ("city", params.city.to_string()),
-            ("country", params.country.to_string()),
-            ("method", params.method.to_string()),
-            ("school", params.school.to_string()),
-        ])
+        .query(&params.query())
         .send()
         .map_err(|e| format!("network error: {e}"))?
         .error_for_status()
@@ -255,37 +335,25 @@ pub fn fetch_day_by_city(
 }
 
 // ---------------------------------------------------------------------------
-// Disk cache — one file per (method, school, year, month)
+// Disk cache — one file per (location, method, school, year, month)
 // ---------------------------------------------------------------------------
 
-fn month_cache_path(
-    dir: &Path,
-    method: u8,
-    school: AsrSchool,
-    year: i32,
-    month: u32,
-) -> PathBuf {
-    dir.join("cache").join(format!(
-        "calendar-{method}-{school}-{year}-{month:02}.json"
-    ))
+/// `cache_id` comes from [`FetchParams::cache_id`].
+fn month_cache_path(dir: &Path, cache_id: &str, year: i32, month: u32) -> PathBuf {
+    dir.join("cache")
+        .join(format!("calendar-{cache_id}-{year}-{month:02}.json"))
 }
 
-pub fn load_month(
-    dir: &Path,
-    method: u8,
-    school: AsrSchool,
-    year: i32,
-    month: u32,
-) -> Option<MonthCache> {
-    let path = month_cache_path(dir, method, school, year, month);
+pub fn load_month(dir: &Path, cache_id: &str, year: i32, month: u32) -> Option<MonthCache> {
+    let path = month_cache_path(dir, cache_id, year, month);
     let text = std::fs::read_to_string(path).ok()?;
     let mut cache: MonthCache = serde_json::from_str(&text).ok()?;
     cache.from_cache = true;
     Some(cache)
 }
 
-pub fn save_month(dir: &Path, cache: &MonthCache, method: u8, school: AsrSchool) {
-    let path = month_cache_path(dir, method, school, cache.year, cache.month);
+pub fn save_month(dir: &Path, cache_id: &str, cache: &MonthCache) {
+    let path = month_cache_path(dir, cache_id, cache.year, cache.month);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -332,6 +400,78 @@ mod tests {
         assert_eq!(day.times.len(), 5);
         assert_eq!(day.times[&Prayer::Isha], NaiveTime::from_hms_opt(18, 39, 0).unwrap());
         assert_eq!(day.midnight, NaiveTime::from_hms_opt(23, 51, 0).unwrap());
+    }
+
+    fn location(city: &str, coordinates: Option<Coordinates>) -> Location {
+        Location {
+            city: city.to_string(),
+            country: "India".to_string(),
+            country_code: "IN".to_string(),
+            timezone: "Asia/Kolkata".to_string(),
+            region: None,
+            coordinates,
+        }
+    }
+
+    const KOLKATA: Coordinates = Coordinates {
+        latitude: 22.56263,
+        longitude: 88.36304,
+    };
+
+    fn params(place: Place<'_>) -> FetchParams<'_> {
+        FetchParams {
+            place,
+            method: 1,
+            school: AsrSchool::Hanafi,
+        }
+    }
+
+    #[test]
+    fn picked_city_is_fetched_by_coordinates() {
+        let loc = location("Kolkata", Some(KOLKATA));
+        let p = params(Place::of(&loc));
+        assert_eq!(p.endpoints(), ("calendar", "timings"));
+        let q = p.query();
+        assert!(q.contains(&("latitude", "22.56263".to_string())));
+        assert!(q.contains(&("longitude", "88.36304".to_string())));
+        assert!(q.contains(&("timezonestring", "Asia/Kolkata".to_string())));
+        assert!(q.contains(&("school", "1".to_string())));
+        assert!(!q.iter().any(|(k, _)| *k == "city"));
+    }
+
+    #[test]
+    fn typed_city_is_fetched_by_name() {
+        let loc = location("Kolkata", None);
+        let p = params(Place::of(&loc));
+        assert_eq!(p.endpoints(), ("calendarByCity", "timingsByCity"));
+        let q = p.query();
+        assert!(q.contains(&("city", "Kolkata".to_string())));
+        assert!(q.contains(&("country", "IN".to_string())));
+    }
+
+    #[test]
+    fn cache_id_differs_per_location_and_settings() {
+        let kolkata = location("Kolkata", Some(KOLKATA));
+        let mumbai = location(
+            "Mumbai",
+            Some(Coordinates {
+                latitude: 19.07283,
+                longitude: 72.88261,
+            }),
+        );
+        let typed = location("Kolkata", None);
+        let id = |l: &Location| params(Place::of(l)).cache_id();
+        assert_ne!(id(&kolkata), id(&mumbai));
+        assert_ne!(id(&kolkata), id(&typed));
+        // Same place → same id; case/whitespace of a typed name don't matter.
+        assert_eq!(id(&typed), id(&location(" kolkata ", None)));
+        let mut other_method = params(Place::of(&kolkata));
+        other_method.method = 3;
+        assert_ne!(other_method.cache_id(), id(&kolkata));
+        // Stable format (file names must survive upgrades).
+        assert!(id(&typed).starts_with("1-1-"));
+        assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a(b"a"), 0xaf63_dc4c_8601_ec8c);
     }
 
     #[test]

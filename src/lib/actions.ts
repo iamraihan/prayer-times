@@ -4,7 +4,7 @@
  * UI event -> action -> Rust -> new AppState -> store -> re-render.
  */
 import { api, type PreviewRequest } from "./ipc";
-import type { AsrSchool, Location, LocationPreview, Prayer, Settings } from "./types";
+import type { AsrSchool, CityMatch, Location, LocationPreview, Prayer, Settings } from "./types";
 import { useAppStore } from "../store/useAppStore";
 
 function apply(s: Awaited<ReturnType<typeof api.getState>>): void {
@@ -37,6 +37,10 @@ export async function alarmSnooze(minutes: number): Promise<void> {
 
 export async function alarmDismiss(): Promise<void> {
   apply(await api.alarmDismiss());
+}
+
+export function searchCities(query: string, countryCode: string): Promise<CityMatch[]> {
+  return api.searchCities(query, countryCode);
 }
 
 export function previewLocation(req: PreviewRequest): Promise<LocationPreview> {

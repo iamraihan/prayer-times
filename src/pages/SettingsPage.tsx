@@ -232,7 +232,9 @@ export function SettingsPage() {
           {settings.location ? (
             <p className="flex items-center gap-2 text-sm text-slate-300">
               <MapPin className="h-4 w-4 text-emerald-400" />
-              {settings.location.city}, {settings.location.country}
+              {settings.location.region
+                ? `${settings.location.city}, ${settings.location.region}, ${settings.location.country}`
+                : `${settings.location.city}, ${settings.location.country}`}
               <span className="text-xs text-slate-500">
                 ({settings.location.timezone})
               </span>
@@ -242,6 +244,17 @@ export function SettingsPage() {
           )}
           <Button onClick={() => setChangingLocation(true)}>Change…</Button>
         </div>
+        {state?.locationWarning && (
+          <p role="alert" className="mt-3 text-sm text-amber-400">
+            {state.locationWarning}
+          </p>
+        )}
+        {settings.location && !settings.location.coordinates && !state?.locationWarning && (
+          <p className="mt-3 text-xs text-slate-500">
+            This city was set by name. Use Change… to pick it from the list for times calculated
+            at its exact position.
+          </p>
+        )}
       </Card>
 
       <Card

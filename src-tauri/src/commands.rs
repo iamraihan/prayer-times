@@ -7,12 +7,13 @@ use std::time::Duration;
 use chrono::Utc;
 use tauri::{AppHandle, State};
 
-use crate::aladhan;
+use crate::aladhan::{self, FetchParams, Place};
 use crate::engine::{self, Engine};
 use crate::models::{
-    AppStateDto, AsrSchool, Location, LocationPreviewDto, Prayer, PreviewRequest, Settings,
+    AppStateDto, AsrSchool, CityMatchDto, Coordinates, Location, LocationPreviewDto, Prayer,
+    PreviewRequest, Settings,
 };
-use crate::timeutil;
+use crate::{geocode, timeutil, tzcountry};
 use crate::SharedEngine;
 
 fn with_engine<R>(shared: &SharedEngine, f: impl FnOnce(&mut Engine) -> R) -> R {
@@ -25,52 +26,119 @@ pub fn get_state(shared: State<'_, SharedEngine>) -> AppStateDto {
     with_engine(&shared, |engine| engine.snapshot())
 }
 
-/// Fetches a live day for the wizard without touching any state.
+fn http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent(concat!("prayer-times/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// City search for the location picker (towns in `country_code` only).
+#[tauri::command]
+pub async fn search_cities(query: String, country_code: String) -> Result<Vec<CityMatchDto>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        geocode::search(&http_client()?, &query, &country_code)
+    })
+    .await
+    .map_err(|e| format!("search task failed: {e}"))?
+}
+
+/// Fetches a live day for the wizard without touching any state. A picked
+/// search result is used as-is (exact coordinates); a typed name is looked
+/// up by the API and rejected when it lands in another country.
 #[tauri::command]
 pub async fn preview_location(req: PreviewRequest) -> Result<LocationPreviewDto, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .build()
-            .map_err(|e| e.to_string())?;
-        let params = aladhan::FetchParams {
-            city: req.city.trim(),
-            country: &req.country_code,
-            method: req.method,
-            school: req.school,
-        };
-
-        // Ask with today (device-local) first; if the city's calendar day
-        // differs (timezone offset), re-ask for the correct day.
-        let guess = Utc::now().date_naive();
-        let (day, tz_name) = aladhan::fetch_day_by_city(&client, &params, guess)?;
-        let tz = timeutil::parse_tz(&tz_name).ok_or_else(|| {
-            if tz_name.is_empty() {
-                "API response did not include a timezone for this city".to_string()
-            } else {
-                format!("API returned unknown timezone: {tz_name}")
+        let client = http_client()?;
+        let (location, typed_day) = match req.picked {
+            Some(picked) => (picked_location(picked, &req.country, &req.country_code)?, None),
+            None => {
+                let (location, day) = typed_location(&client, &req)?;
+                (location, Some(day))
             }
-        })?;
-        let city_today = Utc::now().with_timezone(&tz).date_naive();
-        let day = if city_today != guess {
-            aladhan::fetch_day_by_city(&client, &params, city_today)?.0
-        } else {
-            day
         };
 
-        let location = Location {
-            city: req.city.trim().to_string(),
-            country: req.country,
-            country_code: req.country_code,
-            timezone: tz_name,
+        let tz = timeutil::parse_tz(&location.timezone)
+            .ok_or_else(|| format!("unknown timezone: {}", location.timezone))?;
+        let city_today = Utc::now().with_timezone(&tz).date_naive();
+        let day = match typed_day {
+            Some(day) if day.date == city_today => day,
+            _ => {
+                let params = FetchParams {
+                    place: Place::of(&location),
+                    method: req.method,
+                    school: req.school,
+                };
+                aladhan::fetch_day(&client, &params, city_today)?.0
+            }
         };
+
         Ok(LocationPreviewDto {
-            location,
             day: engine::day_timings_dto(&day, Some(tz), false),
+            location,
         })
     })
     .await
     .map_err(|e| format!("preview task failed: {e}"))?
+}
+
+fn picked_location(picked: CityMatchDto, country: &str, country_code: &str) -> Result<Location, String> {
+    if !picked.country_code.eq_ignore_ascii_case(country_code) {
+        return Err(format!("{} isn't in {country}.", picked.name));
+    }
+    if timeutil::parse_tz(&picked.timezone).is_none() {
+        return Err(format!("unknown timezone: {}", picked.timezone));
+    }
+    Ok(Location {
+        city: picked.name,
+        country: country.to_string(),
+        country_code: country_code.to_ascii_uppercase(),
+        timezone: picked.timezone,
+        region: picked.region,
+        coordinates: Some(Coordinates {
+            latitude: picked.latitude,
+            longitude: picked.longitude,
+        }),
+    })
+}
+
+/// Looks a typed name up by the API (which also tells the timezone).
+fn typed_location(
+    client: &reqwest::blocking::Client,
+    req: &PreviewRequest,
+) -> Result<(Location, aladhan::DayTimings), String> {
+    let city = req.city.trim();
+    let params = FetchParams {
+        place: Place::City {
+            city,
+            country: &req.country_code,
+        },
+        method: req.method,
+        school: req.school,
+    };
+    // Device-local date is a guess; the caller refetches if the city's
+    // calendar day differs.
+    let (day, timezone) = aladhan::fetch_day(client, &params, Utc::now().date_naive())?;
+    if timezone.is_empty() {
+        return Err("API response did not include a timezone for this city".to_string());
+    }
+    if tzcountry::zone_in_country(&timezone, &req.country_code) == Some(false) {
+        return Err(format!(
+            "Couldn't find “{city}” in {}: the closest match is in the {timezone} timezone. \
+             Check the spelling, or pick your city from the search results.",
+            req.country
+        ));
+    }
+    let location = Location {
+        city: city.to_string(),
+        country: req.country.clone(),
+        country_code: req.country_code.clone(),
+        timezone,
+        region: None,
+        coordinates: None,
+    };
+    Ok((location, day))
 }
 
 #[tauri::command]
@@ -80,6 +148,10 @@ pub fn save_location(
     method: u8,
     school: AsrSchool,
 ) -> Result<AppStateDto, String> {
+    // Same check as the preview, in case a mismatched location gets here.
+    if let Some(warning) = engine::location_warning(&location) {
+        return Err(warning);
+    }
     let dto = with_engine(&shared, |engine| {
         engine.save_location(location, method, school);
         engine.tick();
@@ -209,4 +281,80 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
         autolaunch.disable().map_err(|e| e.to_string())?;
     }
     Ok(autolaunch.is_enabled().unwrap_or(enabled))
+}
+
+/// Live-network checks of the location flow. Not run by default (CI has no
+/// business depending on third-party APIs): `cargo test -- --ignored`.
+#[cfg(test)]
+mod network_tests {
+    use super::*;
+
+    fn typed(city: &str, country: &str, code: &str) -> PreviewRequest {
+        PreviewRequest {
+            city: city.to_string(),
+            country: country.to_string(),
+            country_code: code.to_string(),
+            method: 3,
+            school: AsrSchool::Standard,
+            picked: None,
+        }
+    }
+
+    #[test]
+    #[ignore = "network"]
+    fn search_finds_real_towns_and_nothing_for_typos() {
+        let client = http_client().unwrap();
+        let kolk = geocode::search(&client, "Kolk", "IN").unwrap();
+        assert_eq!(kolk[0].name, "Kolkata");
+        assert_eq!(kolk[0].timezone, "Asia/Kolkata");
+        assert!(geocode::search(&client, "Londn", "GB").unwrap().is_empty());
+        // Country filter: no Mumbai in Bangladesh.
+        assert!(geocode::search(&client, "Mumbai", "BD")
+            .unwrap()
+            .iter()
+            .all(|m| m.country_code == "BD"));
+    }
+
+    #[test]
+    #[ignore = "network"]
+    fn typed_city_in_wrong_country_is_rejected() {
+        let client = http_client().unwrap();
+        let err = typed_location(&client, &typed("Londn", "United Kingdom", "GB")).unwrap_err();
+        assert!(err.contains("America/New_York"), "{err}");
+        assert!(typed_location(&client, &typed("Mumbai", "Bangladesh", "BD")).is_err());
+        let (ok, _) = typed_location(&client, &typed("Dhka", "Bangladesh", "BD")).unwrap();
+        assert_eq!(ok.timezone, "Asia/Dhaka");
+    }
+
+    #[test]
+    #[ignore = "network"]
+    fn picked_city_gets_same_times_as_city_lookup() {
+        let client = http_client().unwrap();
+        let london = geocode::search(&client, "London", "GB").unwrap().remove(0);
+        let location = picked_location(london, "United Kingdom", "GB").unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
+        let params = |place| FetchParams {
+            place,
+            method: 3,
+            school: AsrSchool::Standard,
+        };
+        let (by_coords, tz) = aladhan::fetch_day(&client, &params(Place::of(&location)), date).unwrap();
+        let (by_name, _) = aladhan::fetch_day(
+            &client,
+            &params(Place::City {
+                city: "London",
+                country: "GB",
+            }),
+            date,
+        )
+        .unwrap();
+        assert_eq!(tz, "Europe/London");
+        let fajr = |d: &aladhan::DayTimings| d.times[&Prayer::Fajr];
+        let diff = (fajr(&by_coords) - fajr(&by_name)).num_minutes().abs();
+        assert!(diff <= 2, "coords {} vs name {}", fajr(&by_coords), fajr(&by_name));
+
+        let month = aladhan::fetch_month(&client, &params(Place::of(&location)), 2026, 11).unwrap();
+        assert_eq!(month.days.len(), 30);
+        assert_eq!(month.timezone, "Europe/London");
+    }
 }

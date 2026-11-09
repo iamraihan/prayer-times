@@ -29,6 +29,8 @@ windows are hidden.
 │                                                               │      │
 │  schedule.rs  pure: DayTimings + Settings → [PlannedEvent]     │      │
 │  aladhan.rs   API client + month disk cache                    │      │
+│  geocode.rs   city search (Open-Meteo) for the location picker │      │
+│  tzcountry.rs timezone → countries (vendored tzdb tables)       │      │
 │  alarm.rs     notification + always-on-top popup window        │      │
 │  models.rs    domain + DTOs (camelCase on the wire)            │      │
 │  settings.rs / runtime.rs   JSON persistence                   │      │
@@ -40,9 +42,11 @@ windows are hidden.
 
 1. **Startup** — `Engine::new` loads `settings.json` + `runtime.json`,
    builds the tray and (hidden) alarm window, spawns the engine thread.
-2. **Month load** — `plan_fetches` wants today's and tomorrow's months:
+2. **Month load** — `plan_fetches` wants the months of yesterday, today
+   and tomorrow (location dates):
    memory → disk cache → network (throttled to one retry/minute). Months
-   are cached per `(method, school, year, month)`.
+   are cached per `(location, method, school, year, month)`; a fetch that
+   finishes after the location changed is dropped.
 3. **Every tick (15 s)** — `schedule::compute` derives the day's events;
    due events (within a 10-minute grace for missed ones) fire; the tray and
    both windows get a fresh snapshot.
@@ -116,6 +120,13 @@ Rules of thumb:
   device zone.
 - **Per-day state follows the Prayer Day, not the calendar day** — see
   [ADR 0001](docs/adr/0001-prayer-day-rollover.md).
+- **Locations are picked, not typed**: the wizard searches Open-Meteo and
+  stores the chosen city's coordinates + timezone; times are then fetched
+  by coordinates. A typed name (fallback when search can't find a town, and
+  every location saved by older versions) goes through Aladhan's name lookup, which
+  can silently match a place elsewhere — so it is rejected when the matched
+  timezone isn't used in the chosen country (`tzcountry.rs`), and a saved one
+  shows a warning.
 - **Month-granularity caching** keeps the app fully offline for the current
   month and costs one request per month online.
 - **Fetches happen only on the engine thread, outside the state lock**, so

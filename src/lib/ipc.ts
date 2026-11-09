@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppState,
   AsrSchool,
+  CityMatch,
   Location,
   LocationPreview,
   Prayer,
@@ -24,6 +25,7 @@ type NoArgs = Record<string, never>;
 
 interface Commands {
   get_state: [NoArgs, AppState];
+  search_cities: [{ query: string; countryCode: string }, CityMatch[]];
   preview_location: [{ req: PreviewRequest }, LocationPreview];
   save_location: [{ location: Location; method: number; school: AsrSchool }, AppState];
   update_settings: [{ settings: Settings }, AppState];
@@ -46,6 +48,9 @@ const none: NoArgs = {};
 
 export const api = {
   getState: () => call("get_state", none),
+
+  searchCities: (query: string, countryCode: string) =>
+    call("search_cities", { query, countryCode }),
 
   previewLocation: (req: PreviewRequest) => call("preview_location", { req }),
 

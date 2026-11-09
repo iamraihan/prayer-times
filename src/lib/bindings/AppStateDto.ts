@@ -9,4 +9,10 @@ export type AppStateDto = { hasLocation: boolean, settings: Settings, today: Day
 /**
  * Pending snoozed reminders: prayer -> due instant (RFC3339).
  */
-snoozes: { [key in Prayer]?: string }, activeAlarm: ActiveAlarmDto | null, apiError: string | null, };
+snoozes: { [key in Prayer]?: string }, activeAlarm: ActiveAlarmDto | null, apiError: string | null, 
+/**
+ * Set when the saved location looks wrong (a typed city name that the
+ * API matched to a place in another country); the UI asks the user to
+ * pick their city again.
+ */
+locationWarning: string | null, };

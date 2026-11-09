@@ -30,6 +30,19 @@ _Avoid_: Schedule (that means the alarms), timings
 Wall-clock time in the timezone of the user's chosen city. All prayer times are expressed in it, never in the device's timezone.
 _Avoid_: Local time (ambiguous)
 
+### Location
+
+**Location**:
+The place the user's prayer times are calculated for: a city in a country, with its timezone.
+_Avoid_: Address, place (in UI copy)
+
+**Picked City**:
+A Location chosen from city search results, so its exact coordinates are known and times are calculated for that spot.
+
+**Typed City**:
+A Location given only by name, which the times service looks up by itself and may match to the wrong place. Only a fallback when search can't find the town (and how older versions stored every Location).
+_Avoid_: Manual city, custom city
+
 ### Calculation
 
 **Calculation Method**:
