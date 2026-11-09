@@ -9,6 +9,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AlarmKind,
   AppState,
   AsrSchool,
   CityMatch,
@@ -33,6 +34,8 @@ interface Commands {
   alarm_done: [NoArgs, AppState];
   alarm_snooze: [{ minutes: number }, AppState];
   alarm_dismiss: [NoArgs, AppState];
+  /** Dev builds only; release builds reject it. */
+  preview_alarm: [{ kind: AlarmKind }, AppState];
   test_sound: [{ volume: number | null }, void];
   set_alarm_tone: [{ path: string }, AppState];
   reset_alarm_tone: [NoArgs, AppState];
@@ -66,6 +69,8 @@ export const api = {
   alarmSnooze: (minutes: number) => call("alarm_snooze", { minutes }),
 
   alarmDismiss: () => call("alarm_dismiss", none),
+
+  previewAlarm: (kind: AlarmKind) => call("preview_alarm", { kind }),
 
   /** `volume` (0–1) previews an unsaved slider value; omit to use the saved one. */
   testSound: (volume?: number) => call("test_sound", { volume: volume ?? null }),

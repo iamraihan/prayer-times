@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import { BellRing, CheckCircle2 } from "lucide-react";
-import { AlarmActions, plainTitle } from "../components/AlarmActions";
+import { BellRing } from "lucide-react";
+import { AlarmActions, alarmBeforeStart, countsToPrayer, plainTitle } from "../components/AlarmActions";
 import { PrayerIcon } from "../components/PrayerIcon";
 import { startClock, useAppStore } from "../store/useAppStore";
 import { PRAYER_LABELS } from "../lib/types";
@@ -19,6 +19,7 @@ export function AlarmWindow() {
     return prayer ? (s.state?.doneToday ?? {})[prayer] === true : false;
   });
   const now = useAppStore((s) => s.now);
+  const state = useAppStore((s) => s.state);
 
   useEffect(() => {
     startClock();
@@ -30,8 +31,9 @@ export function AlarmWindow() {
     return null;
   }
 
-  const endMs = new Date(alarm.endsAt).getTime();
-  const endsIn = isNaN(endMs) ? null : countdown(endMs - now);
+  const early = countsToPrayer(alarm, now);
+  const targetMs = Date.parse(early ? alarm.prayAt : alarm.endsAt);
+  const endsIn = isNaN(targetMs) ? null : countdown(targetMs - now);
 
   return (
     <div className="flex h-screen flex-col justify-center bg-slate-950 px-6 py-8">
@@ -43,7 +45,7 @@ export function AlarmWindow() {
           <p className="flex items-center gap-1.5 text-[13px] text-slate-400">
             <PrayerIcon prayer={alarm.prayer} className="h-3.5 w-3.5" />
             {PRAYER_LABELS[alarm.prayer]}
-            {endsIn && <span className="tnum"> · ends in {endsIn}</span>}
+            {endsIn && <span className="tnum">{early ? " in " : " · ends in "}{endsIn}</span>}
           </p>
           <h1 className="text-lg font-semibold leading-snug text-slate-50">
             {plainTitle(alarm.message.title)}
@@ -53,14 +55,12 @@ export function AlarmWindow() {
 
       <p className="mt-4 text-[15px] leading-relaxed text-slate-300">{alarm.message.body}</p>
 
-      {done && (
-        <p className="mt-3 flex items-center gap-1.5 text-[13px] text-emerald-300">
-          <CheckCircle2 className="h-4 w-4" aria-hidden /> Marked as done
-        </p>
-      )}
-
       <div className="mt-8">
-        <AlarmActions done={done} />
+        <AlarmActions
+          done={done}
+          kind={alarm.kind}
+          beforeStart={alarmBeforeStart(state, alarm, now)}
+        />
       </div>
     </div>
   );

@@ -55,15 +55,23 @@ _Avoid_: Madhab (too broad)
 ### Alarms
 
 **Event**:
-A planned moment in a Prayer Day when the app should alert the user about one prayer: either its Main Alarm or its Before-End Warning.
+A planned moment in a Prayer Day when the app should alert the user about one prayer: its Get-Ready Alarm, its Main Alarm or its Before-End Warning.
 _Avoid_: Notification (that is one way an Alarm is shown)
 
+**Own Prayer Time**:
+When the user actually prays a prayer: its start time, or a set number of minutes after it ("I pray 75 min after it starts", e.g. with a mosque), never in the window's last 5 minutes. It follows the start time from day to day. The Get-Ready and Main Alarms are tied to it; the Prayer Window and Before-End Warning are not.
+_Avoid_: Jamaat time, iqamah (in code), delay
+
+**Get-Ready Alarm**:
+An optional heads-up a set number of minutes (at most an hour) before the Own Prayer Time ("Asr in 10 minutes"), shown as "Get ready" in the UI. It never rings before its Prayer Day begins. Before the window opens it offers only "Got it"; inside the window "Got it" leads and Done is a secondary choice.
+_Avoid_: Early alarm, pre-alarm
+
 **Main Alarm**:
-A prayer's primary alert. It rings at the start of the window, or a set number of minutes into it ("you still have … minutes"), but never in the window's last 5 minutes.
+A prayer's primary alert, at its Own Prayer Time (the start of its window unless set later). Shown as "Prayer time" in the UI; it can be switched off.
 _Avoid_: Start alarm, reminder (when the main one is meant)
 
 **Before-End Warning**:
-A final alert a set number of minutes before a Prayer Window closes ("you will miss it").
+A final alert a set number of minutes before a Prayer Window closes ("you will miss it"), shown as "Don't miss it" in the UI.
 _Avoid_: Pre-end alarm, last call
 
 **Alarm**:

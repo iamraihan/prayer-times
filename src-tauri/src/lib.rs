@@ -103,6 +103,7 @@ pub fn run() {
             commands::alarm_done,
             commands::alarm_snooze,
             commands::alarm_dismiss,
+            commands::preview_alarm,
             commands::test_sound,
             commands::set_alarm_tone,
             commands::reset_alarm_tone,

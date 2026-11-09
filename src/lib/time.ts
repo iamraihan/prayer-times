@@ -24,7 +24,7 @@ export function fmtClock(value: Date | string, mode: TimeFormat = "12h"): string
   return fmtHourMinute(d.getHours(), d.getMinutes(), mode);
 }
 
-function fmtHourMinute(h: number, m: number, mode: TimeFormat): string {
+export function fmtHourMinute(h: number, m: number, mode: TimeFormat): string {
   const mm = String(m).padStart(2, "0");
   if (mode === "24h") return `${String(h).padStart(2, "0")}:${mm}`;
   const suffix = h < 12 ? "AM" : "PM";
