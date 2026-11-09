@@ -1,16 +1,13 @@
 import type { ReactNode } from "react";
 import { Check, Sunrise } from "lucide-react";
 import { useAppState, useNow } from "../store/useAppStore";
-import {
-  PRAYERS,
-  PRAYER_EMOJIS,
-  PRAYER_LABELS,
-  type Prayer,
-  type PrayerTime,
-} from "../lib/types";
+import { PRAYERS, PRAYER_LABELS, type Prayer, type PrayerTime } from "../lib/types";
 import { fmtHM, parseHM, type TimeFormat } from "../lib/time";
 import { setPrayerDone } from "../lib/actions";
+import { PrayerIcon } from "./PrayerIcon";
 import { cn } from "../lib/cn";
+
+type Status = "done" | "current" | "past" | "upcoming";
 
 /**
  * Today's five prayers with start/end times, live status and the
@@ -22,7 +19,7 @@ export function PrayerList() {
 
   if (!state?.today) {
     return (
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-center text-sm text-slate-400">
+      <div className="rounded-xl border border-slate-800/80 bg-slate-900/50 px-5 py-8 text-center text-sm text-slate-400">
         Waiting for today's times…
       </div>
     );
@@ -31,48 +28,29 @@ export function PrayerList() {
   const mode: TimeFormat = state.settings.timeFormat;
   const today = state.today;
   const nextPrayer = state.next?.prayer;
-  const done = state.doneToday ?? {};
+  const done = state.doneToday;
+  const times = PRAYERS.flatMap((p) => today.timings.filter((t) => t.prayer === p));
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
-      <ul className="divide-y divide-slate-800/80">
-        {PRAYERS.flatMap((p) => {
-          const t = today.timings.find((x) => x.prayer === p);
-          if (!t) return [];
-          return [t];
-        }).flatMap((t: PrayerTime) => {
-          const rows: ReactNode[] = [];
-          if (t.prayer === "fajr") {
-            rows.push(
-              <li
-                key="sunrise"
-                className="flex items-center justify-between px-5 py-3 text-slate-500"
-              >
-                <span className="flex items-center gap-3 text-sm">
-                  <Sunrise className="h-4 w-4" /> Sunrise
-                </span>
-                <span className="font-mono text-sm">{fmtHM(today.sunrise, mode)}</span>
-              </li>,
-            );
-          }
-          rows.push(
-            <PrayerRow
-              key={t.prayer}
-              time={t}
-              mode={mode}
-              done={Boolean(done[t.prayer])}
-              isNext={nextPrayer === t.prayer}
-              now={now}
-            />,
-          );
-          return rows;
-        })}
+    <section aria-label="Today's prayers">
+      <ul className="divide-y divide-slate-800/70 overflow-hidden rounded-xl border border-slate-800/80 bg-slate-900/50">
+        {times.map((t) => (
+          <PrayerRow
+            key={t.prayer}
+            time={t}
+            mode={mode}
+            done={Boolean(done[t.prayer])}
+            isNext={nextPrayer === t.prayer}
+            now={now}
+            // Sunrise is where Fajr's window ends, so it sits right below it.
+            after={t.prayer === "fajr" ? <SunriseRow time={fmtHM(today.sunrise, mode)} /> : null}
+          />
+        ))}
       </ul>
-      <p className="border-t border-slate-800/80 px-5 py-2.5 text-xs text-slate-500">
-        "Ends" is when the prayer's time window closes (Fajr at sunrise, Isha at
-        midnight).
+      <p className="mt-2.5 px-1 text-[12px] leading-relaxed text-slate-500">
+        Each prayer's time ends when the next begins — Fajr at sunrise, Isha at midnight.
       </p>
-    </div>
+    </section>
   );
 }
 
@@ -82,9 +60,10 @@ interface PrayerRowProps {
   done: boolean;
   isNext: boolean;
   now: number;
+  after: ReactNode;
 }
 
-function PrayerRow({ time, mode, done, isNext, now }: PrayerRowProps) {
+function PrayerRow({ time, mode, done, isNext, now, after }: PrayerRowProps) {
   const prayer: Prayer = time.prayer;
   // The backend sends each window as exact instants in the location's
   // timezone, so this works when the device is in another zone and when
@@ -95,57 +74,71 @@ function PrayerRow({ time, mode, done, isNext, now }: PrayerRowProps) {
   const started = now >= startMs;
   const inWindow = started && now < endMs;
 
-  const status: "done" | "current" | "past" | "upcoming" = done
-    ? "done"
-    : inWindow
-      ? "current"
-      : started
-        ? "past"
-        : "upcoming";
+  const status: Status = done ? "done" : inWindow ? "current" : started ? "past" : "upcoming";
 
   return (
-    <li
-      className={cn(
-        "flex items-center justify-between gap-4 px-5 py-3.5",
-        status === "current" && "bg-emerald-950/20",
-        isNext && status !== "done" && "bg-slate-800/30",
-      )}
-    >
-      <div className="flex min-w-0 items-center gap-4">
+    <>
+      <li
+        className={cn(
+          "flex items-center gap-4 px-4 py-3.5 transition-colors",
+          status === "current" && "bg-emerald-400/[0.05]",
+          isNext && status === "upcoming" && "bg-slate-800/30",
+        )}
+        aria-current={status === "current" ? "time" : undefined}
+      >
         <DoneCheckbox
           checked={done}
+          label={`${PRAYER_LABELS[prayer]} prayed`}
           onChange={(v) => void setPrayerDone(prayer, v)}
         />
-        <div className="min-w-0">
+        <PrayerIcon
+          prayer={prayer}
+          className={cn(
+            "h-[18px] w-[18px] shrink-0",
+            status === "current" ? "text-emerald-300" : "text-slate-500",
+          )}
+        />
+        <div className="min-w-0 flex-1">
           <p
             className={cn(
-              "flex items-center gap-2 font-medium",
-              status === "done" && "text-slate-500 line-through",
-              status === "past" && !done && "text-slate-400",
-              status !== "done" && status !== "past" && "text-slate-100",
+              "font-medium",
+              status === "done" && "text-slate-500 line-through decoration-slate-600",
+              status === "current" && "text-emerald-200",
+              status === "past" && "text-slate-300",
+              status === "upcoming" && "text-slate-100",
             )}
           >
-            <span>{PRAYER_EMOJIS[prayer]}</span>
             {PRAYER_LABELS[prayer]}
-            {status === "current" && (
-              <span className="rounded-full bg-emerald-600/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">
-                now
-              </span>
-            )}
-            {status === "past" && !done && (
-              <span className="rounded-full bg-amber-600/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-400">
-                passed
-              </span>
-            )}
           </p>
-          <p className="mt-0.5 font-mono text-xs text-slate-500">
-            ends {fmtHM(time.ends, mode)}
+          <p className="tnum mt-0.5 text-[13px] text-slate-500">
+            until {fmtHM(time.ends, mode)}
+            {status === "current" && <span className="text-emerald-300/90"> · now</span>}
+            {status === "past" && <span className="text-amber-300/80"> · time passed</span>}
           </p>
         </div>
-      </div>
-      <span className="font-mono text-lg tabular-nums">
-        {fmtHM(time.start, mode)}
-      </span>
+        <span
+          className={cn(
+            "tnum text-[15px] font-medium",
+            status === "done" ? "text-slate-500" : "text-slate-100",
+            status === "current" && "text-emerald-200",
+          )}
+        >
+          {fmtHM(time.start, mode)}
+        </span>
+      </li>
+      {after}
+    </>
+  );
+}
+
+function SunriseRow({ time }: { time: string }) {
+  return (
+    <li className="flex items-center gap-4 px-4 py-2 text-[13px] text-slate-500">
+      {/* Checkbox-column spacer keeps the icon and name columns aligned. */}
+      <span className="w-5 shrink-0" aria-hidden />
+      <Sunrise className="h-[18px] w-[18px] shrink-0" strokeWidth={1.75} aria-hidden />
+      <span className="flex-1">Sunrise</span>
+      <span className="tnum">{time}</span>
     </li>
   );
 }
@@ -159,9 +152,11 @@ function wallClockToday(now: number, hm: string): number {
 
 function DoneCheckbox({
   checked,
+  label,
   onChange,
 }: {
   checked: boolean;
+  label: string;
   onChange: (v: boolean) => void;
 }) {
   return (
@@ -169,17 +164,17 @@ function DoneCheckbox({
       type="button"
       role="checkbox"
       aria-checked={checked}
-      aria-label="Mark prayer as done"
+      aria-label={label}
+      title={checked ? "Marked as prayed" : "Mark as prayed"}
       onClick={() => onChange(!checked)}
       className={cn(
-        "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-colors",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400",
+        "flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] border transition-colors duration-150",
         checked
-          ? "border-emerald-500 bg-emerald-600 text-white"
-          : "border-slate-600 hover:border-emerald-500",
+          ? "border-emerald-600 bg-emerald-600 text-white"
+          : "border-slate-600 hover:border-emerald-400",
       )}
     >
-      {checked && <Check className="h-4 w-4" />}
+      {checked && <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden />}
     </button>
   );
 }

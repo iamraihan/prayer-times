@@ -3,6 +3,24 @@
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
+
+  /* Neutrals: a deep ink tinted toward the logo's teal instead of Tailwind's
+     cold blue slate. Every `slate-*` utility in the app resolves to these.
+     Contrast on 950/900: 500 ≥ 4.7:1 (muted text), 400 ≥ 6.2:1, 300 ≥ 8.3:1.
+     600 is for borders/disabled only. */
+  --color-slate-50: #f3f6f6;
+  --color-slate-100: #e4eaeb;
+  --color-slate-200: #cdd6d8;
+  --color-slate-300: #aebbbe;
+  --color-slate-400: #93a2a6;
+  --color-slate-500: #7d8c90;
+  --color-slate-600: #56646a;
+  --color-slate-700: #36434a;
+  --color-slate-800: #232e34;
+  --color-slate-900: #172026;
+  --color-slate-950: #0d1418;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @layer base {
@@ -12,32 +30,93 @@
     height: 100%;
   }
 
+  html {
+    /* Native controls (select popups, number spinners, scrollbars) dark too. */
+    color-scheme: dark;
+  }
+
   body {
-    @apply bg-slate-950 font-sans text-slate-100 antialiased;
+    @apply bg-slate-950 font-sans text-[14px] leading-normal text-slate-100 antialiased;
+    caret-color: var(--color-emerald-400);
+    accent-color: var(--color-emerald-500);
+    font-feature-settings: "kern", "calt";
   }
 
   ::selection {
-    @apply bg-emerald-500/30;
+    @apply bg-emerald-400/25 text-slate-50;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-emerald-400);
+    outline-offset: 2px;
+  }
+
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-slate-700) transparent;
   }
 }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+/* Range slider: the track fills up to the thumb via --fill (set inline). */
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  background: transparent;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--color-emerald-500) var(--fill, 0%),
+    var(--color-slate-700) var(--fill, 0%)
+  );
+}
+.range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--color-slate-700);
+}
+.range::-moz-range-progress {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--color-emerald-500);
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -6px;
+  height: 16px;
+  width: 16px;
+  border-radius: 9999px;
+  background: var(--color-slate-50);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+  transition: transform 150ms var(--ease-out-expo);
+}
+.range::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--color-slate-50);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+}
+.range:active::-webkit-slider-thumb {
+  transform: scale(1.12);
 }
 
-@keyframes alarm-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgb(16 185 129 / 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 16px rgb(16 185 129 / 0);
-  }
-}
-
-.alarm-pulse {
-  animation: alarm-pulse 1.6s ease-in-out infinite;
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "kern";
 }
 
 @keyframes fade-in {
@@ -52,7 +131,36 @@
 }
 
 .fade-in {
-  animation: fade-in 0.25s ease-out;
+  animation: fade-in 0.32s var(--ease-out-expo);
+}
+
+/* The one authored motion: the bell of a ringing alarm rocks, then rests. */
+@keyframes bell-ring {
+  0%,
+  42%,
+  100% {
+    transform: rotate(0);
+  }
+  6% {
+    transform: rotate(14deg);
+  }
+  14% {
+    transform: rotate(-12deg);
+  }
+  22% {
+    transform: rotate(8deg);
+  }
+  30% {
+    transform: rotate(-5deg);
+  }
+  36% {
+    transform: rotate(2deg);
+  }
+}
+
+.bell-ring {
+  transform-origin: 50% 15%;
+  animation: bell-ring 2.4s var(--ease-out-expo) infinite;
 }
 
 /* Vertical-only so it can't stack with Tailwind's native `translate`
@@ -69,5 +177,13 @@
 }
 
 .toast-in {
-  animation: toast-in 0.2s ease-out;
+  animation: toast-in 0.28s var(--ease-out-expo);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .toast-in,
+  .bell-ring {
+    animation: none;
+  }
 }

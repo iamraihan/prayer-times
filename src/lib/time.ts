@@ -53,3 +53,45 @@ export function remainingWords(ms: number): string {
   if (h > 0) return `${h} hour${h > 1 ? "s" : ""}`;
   return `${m} minute${m === 1 ? "" : "s"}`;
 }
+
+/** "Monday, 9 November 2026" for a location-local "YYYY-MM-DD" date. */
+export function fmtLongDate(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return ymd;
+  // Noon UTC + a UTC formatter: the calendar date can't shift with the
+  // device's timezone.
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12));
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(d);
+}
+
+/** "3:52 PM" / "15:52" from a backend RFC3339 string, read in the location's
+ * timezone (the string carries the location offset). */
+export function fmtInstant(iso: string, mode: TimeFormat = "12h"): string {
+  const m = /T(\d{2}):(\d{2})/.exec(iso);
+  return m ? fmtHM(`${m[1]}:${m[2]}`, mode) : "--:--";
+}
+
+/** Wall-clock time of any instant (e.g. a UTC snooze time) in `timeZone`. */
+export function fmtClockIn(iso: string, timeZone: string, mode: TimeFormat = "12h"): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "--:--";
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone,
+    }).formatToParts(d);
+    const h = parts.find((p) => p.type === "hour")?.value ?? "00";
+    const m = parts.find((p) => p.type === "minute")?.value ?? "00";
+    return fmtHM(`${h}:${m}`, mode);
+  } catch {
+    return fmtClock(d, mode);
+  }
+}

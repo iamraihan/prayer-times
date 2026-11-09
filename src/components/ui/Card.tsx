@@ -10,7 +10,7 @@ export function Card({ title, description, className, children, ...rest }: CardP
   return (
     <section
       className={cn(
-        "rounded-2xl border border-slate-800 bg-slate-900/60 p-5",
+        "rounded-xl border border-slate-800/80 bg-slate-900/60 p-6",
         className,
       )}
       {...rest}
@@ -19,7 +19,7 @@ export function Card({ title, description, className, children, ...rest }: CardP
         <header className="mb-4">
           {title && <h2 className="text-sm font-semibold text-slate-200">{title}</h2>}
           {description && (
-            <p className="mt-1 text-xs leading-relaxed text-slate-400">{description}</p>
+            <p className="mt-1 text-[13px] leading-relaxed text-slate-400">{description}</p>
           )}
         </header>
       )}

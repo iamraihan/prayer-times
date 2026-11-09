@@ -33,11 +33,3 @@ export const PRAYER_LABELS: Record<Prayer, string> = {
   maghrib: "Maghrib",
   isha: "Isha",
 };
-
-export const PRAYER_EMOJIS: Record<Prayer, string> = {
-  fajr: "🌅",
-  dhuhr: "☀️",
-  asr: "🌤️",
-  maghrib: "🌇",
-  isha: "🌙",
-};
