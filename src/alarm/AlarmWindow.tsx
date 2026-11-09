@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { BellRing } from "lucide-react";
-import { AlarmActions, beforeWindowStart, plainTitle } from "../components/AlarmActions";
+import { AlarmActions, alarmBeforeStart, countsToPrayer, plainTitle } from "../components/AlarmActions";
 import { PrayerIcon } from "../components/PrayerIcon";
 import { startClock, useAppStore } from "../store/useAppStore";
 import { PRAYER_LABELS } from "../lib/types";
@@ -31,7 +31,7 @@ export function AlarmWindow() {
     return null;
   }
 
-  const early = alarm.kind === "getReady";
+  const early = countsToPrayer(alarm, now);
   const targetMs = Date.parse(early ? alarm.prayAt : alarm.endsAt);
   const endsIn = isNaN(targetMs) ? null : countdown(targetMs - now);
 
@@ -59,7 +59,7 @@ export function AlarmWindow() {
         <AlarmActions
           done={done}
           kind={alarm.kind}
-          beforeStart={beforeWindowStart(state, alarm.prayer, now)}
+          beforeStart={alarmBeforeStart(state, alarm, now)}
         />
       </div>
     </div>

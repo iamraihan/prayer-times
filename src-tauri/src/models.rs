@@ -285,6 +285,34 @@ impl Default for Settings {
     }
 }
 
+/// The per-prayer delay older versions shipped (`reminderMinutes`): 30 min
+/// for every prayer except Maghrib.
+fn is_legacy_default_delay(prayer: Prayer, minutes: Option<u32>) -> bool {
+    minutes == if prayer == Prayer::Maghrib { None } else { Some(30) }
+}
+
+/// Parses `settings.json`. A file from before "When you pray" that still
+/// holds the shipped default delay on every prayer gets "at the start"
+/// instead: that value was "remind me 30 min in", never the user's own
+/// prayer time. Customised old values are kept as Own Prayer Times.
+pub fn settings_from_json(text: &str) -> Option<Settings> {
+    let raw: serde_json::Value = serde_json::from_str(text).ok()?;
+    let mut settings: Settings = serde_json::from_value(raw.clone()).ok()?;
+    let legacy = Prayer::ALL.iter().any(|p| {
+        raw.pointer(&format!("/prayerSettings/{}/reminderMinutes", p.id()))
+            .is_some()
+    });
+    let untouched = Prayer::ALL
+        .iter()
+        .all(|p| is_legacy_default_delay(*p, settings.prayer_settings.get(*p).pray_after_minutes));
+    if legacy && untouched {
+        for p in Prayer::ALL {
+            settings.prayer_settings.get_mut(p).pray_after_minutes = None;
+        }
+    }
+    Some(settings)
+}
+
 // ---------------------------------------------------------------------------
 // DTOs pushed to the frontend
 // ---------------------------------------------------------------------------
@@ -456,6 +484,50 @@ mod tests {
         let out = serde_json::to_value(&s).unwrap();
         assert_eq!(out["prayerSettings"]["dhuhr"]["prayAfterMinutes"], 45);
         assert!(out["prayerSettings"]["dhuhr"].get("reminderMinutes").is_none());
+    }
+
+    #[test]
+    fn untouched_old_default_delay_resets_to_at_the_start() {
+        // Every older settings.json carried the shipped default delay
+        // (30 min, Maghrib none). It meant "remind me 30 min in", not "I pray
+        // then", so it doesn't become an Own Prayer Time.
+        let json = r#"{"prayerSettings":{
+            "fajr":{"enabled":true,"reminderMinutes":30},
+            "dhuhr":{"enabled":true,"reminderMinutes":30},
+            "asr":{"enabled":false,"reminderMinutes":30},
+            "maghrib":{"enabled":true,"reminderMinutes":null},
+            "isha":{"enabled":true,"reminderMinutes":30}}}"#;
+        let s = settings_from_json(json).unwrap();
+        for p in Prayer::ALL {
+            assert_eq!(s.prayer_settings.get(p).pray_after_minutes, None, "{p:?}");
+        }
+        assert!(!s.prayer_settings.get(Prayer::Asr).enabled);
+    }
+
+    #[test]
+    fn customised_old_delays_are_kept() {
+        let json = r#"{"prayerSettings":{
+            "fajr":{"enabled":true,"reminderMinutes":30},
+            "dhuhr":{"enabled":true,"reminderMinutes":75},
+            "asr":{"enabled":true,"reminderMinutes":30},
+            "maghrib":{"enabled":true,"reminderMinutes":null},
+            "isha":{"enabled":true,"reminderMinutes":30}}}"#;
+        let s = settings_from_json(json).unwrap();
+        assert_eq!(s.prayer_settings.get(Prayer::Dhuhr).pray_after_minutes, Some(75));
+        assert_eq!(s.prayer_settings.get(Prayer::Fajr).pray_after_minutes, Some(30));
+    }
+
+    #[test]
+    fn new_files_with_thirty_minutes_everywhere_are_kept() {
+        // Written by this version (new key name): a deliberate choice.
+        let json = r#"{"prayerSettings":{
+            "fajr":{"enabled":true,"prayAfterMinutes":30},
+            "dhuhr":{"enabled":true,"prayAfterMinutes":30},
+            "asr":{"enabled":true,"prayAfterMinutes":30},
+            "maghrib":{"enabled":true,"prayAfterMinutes":null},
+            "isha":{"enabled":true,"prayAfterMinutes":30}}}"#;
+        let s = settings_from_json(json).unwrap();
+        assert_eq!(s.prayer_settings.get(Prayer::Isha).pray_after_minutes, Some(30));
     }
 
     #[test]

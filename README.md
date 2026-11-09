@@ -63,7 +63,7 @@ never placed in the window's last 5 minutes.
 | Alarm          | When it fires                                                  | Default |
 | -------------- | -------------------------------------------------------------- | ------- |
 | Get ready      | N minutes before you pray — "Asr in 10 minutes" (5–60 min)     | off, 10 min |
-| Prayer time    | when you pray: the start time, or your own time (below)        | on      |
+| Prayer time    | when you pray: the start time, or your own time (see When you pray)        | on      |
 | Don't miss it  | N minutes before the window closes, if not marked done — "you will miss it" | on, 10 min |
 | Snooze         | when a "Remind me again in N minutes" answer is due            | user-set minutes |
 
@@ -84,8 +84,10 @@ From the popup, the in-app banner, or the tray menu you can:
   number of minutes; the alarm re-fires then.
 - **Dismiss for now** — stops the sound; later reminders still fire because
   the prayer isn't marked done.
-- **Got it** (Get ready only) — the prayer hasn't started yet, so it can't
-  be marked done; this stops the alarm and the later alarms still fire.
+- **Got it** — on a Get ready, or any alarm that rings before the prayer has
+  started: stops the alarm without marking anything done; the later alarms
+  still fire. Once the prayer has started, a Get ready also offers a smaller
+  **Mark as done**.
 
 A prayer window closes at: Fajr → sunrise, Dhuhr → Asr, Asr → Maghrib,
 Maghrib → Isha, Isha → midnight.

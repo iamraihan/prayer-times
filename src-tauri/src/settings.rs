@@ -21,7 +21,7 @@ pub fn load(app: &AppHandle) -> Settings {
     };
     std::fs::read_to_string(dir.join("settings.json"))
         .ok()
-        .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
+        .and_then(|text| crate::models::settings_from_json(&text))
         .unwrap_or_default()
 }
 

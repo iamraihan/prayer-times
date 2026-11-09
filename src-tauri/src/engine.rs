@@ -28,7 +28,7 @@ use crate::models::{
     ActiveAlarmDto, AlarmMessageDto, AppStateDto, AsrSchool, DayTimingsDto, Location, NextPrayerDto,
     Prayer, PrayerTimeDto, Settings,
 };
-use crate::schedule::{self, Due, EventKind, PlannedEvent};
+use crate::schedule::{self, Due, EventKind};
 use crate::sound::Sound;
 use crate::{alarm, runtime, settings as settings_io, timeutil, tray};
 
@@ -74,6 +74,8 @@ pub struct ActiveAlarmState {
     pub fired_at: DateTime<Utc>,
     /// The user's prayer time, for a "Get ready" alarm's countdown.
     pub pray_at: DateTime<Tz>,
+    /// When the prayer's window opens (before it, it can't be marked done).
+    pub window_start: DateTime<Tz>,
     /// Prayer-window end, for the popup's live "ends in" countdown.
     pub ends_at: DateTime<Tz>,
     pub message: AlarmMessageDto,
@@ -273,6 +275,9 @@ impl Engine {
     /// design can be checked without waiting for a real one. It touches no
     /// Done marks, snoozes or fired ids.
     pub fn preview_alarm(&mut self, kind: AlarmKind) -> Result<(), String> {
+        if self.active_alarm.is_some() && !self.showing_preview() {
+            return Err("A real alarm is ringing; answer it first".into());
+        }
         let tz = self
             .settings
             .location
@@ -288,8 +293,9 @@ impl Engine {
             AlarmKind::PreEnd => (now - Duration::minutes(50), now + Duration::minutes(10)),
             AlarmKind::Start | AlarmKind::Snooze => (now, now + Duration::minutes(90)),
         };
+        let start = if kind == AlarmKind::GetReady { pray_at } else { pray_at.min(now) };
         let id = format!("{PREVIEW_ID_PREFIX}{}", prayer.id());
-        self.fire(prayer, kind, pray_at, end, now, id.clone());
+        self.fire(prayer, kind, (start, pray_at, end), now, id.clone());
         self.fired.remove(&id);
         Ok(())
     }
@@ -529,7 +535,10 @@ impl Engine {
             return;
         };
 
-        let events = schedule::compute(&day, tz, &self.settings);
+        let yesterday = today.pred_opt().and_then(|d| self.day_timings(d));
+        let begins = schedule::day_start(&day, tz, yesterday.as_ref());
+        let events = schedule::compute(&day, tz, &self.settings, begins);
+        let windows = schedule::windows(&day, tz, &self.settings);
 
         // Due snoozes (one-shot, then removed from the map).
         let due_snoozes: Vec<(Prayer, String)> = self
@@ -542,9 +551,13 @@ impl Engine {
             self.snoozes.remove(&prayer);
             self.dirty = true;
             if !self.is_done(prayer) {
-                if let Some(event) = events.iter().find(|e| e.prayer == prayer) {
+                // From the window, not the planned events, so a snooze still
+                // rings after its prayer's alarms are switched off.
+                if let Some(w) = windows.iter().find(|w| w.prayer == prayer) {
+                    let after = self.settings.prayer_settings.get(prayer).pray_after_minutes;
+                    let pray_at = schedule::pray_time(w.start, w.end, after);
                     let id = format!("{}|{}|snooze|{}", today, prayer.id(), encoded_at);
-                    self.fire(prayer, AlarmKind::Snooze, event.pray_at, event.end, now, id);
+                    self.fire(prayer, AlarmKind::Snooze, (w.start, pray_at, w.end), now, id);
                 }
             }
         }
@@ -558,7 +571,7 @@ impl Engine {
             match schedule::due(event.at, now, self.fired.contains(&id)) {
                 Due::Fire => {
                     let kind = AlarmKind::from(event.kind);
-                    self.fire(event.prayer, kind, event.pray_at, event.end, now, id);
+                    self.fire(event.prayer, kind, (event.start, event.pray_at, event.end), now, id);
                 }
                 Due::SkipMissed => {
                     // Missed for too long (app closed / asleep): skip silently.
@@ -583,7 +596,7 @@ impl Engine {
             }
         }
 
-        self.update_status_tray(&day, tz, now, &events);
+        self.update_status_tray(&day, tz, now);
         self.push_state();
 
         if self.dirty {
@@ -598,8 +611,7 @@ impl Engine {
         &mut self,
         prayer: Prayer,
         kind: AlarmKind,
-        pray_at: DateTime<Tz>,
-        end: DateTime<Tz>,
+        (start, pray_at, end): (DateTime<Tz>, DateTime<Tz>, DateTime<Tz>),
         now: DateTime<Tz>,
         id: String,
     ) {
@@ -613,6 +625,7 @@ impl Engine {
             kind,
             fired_at: Utc::now(),
             pray_at,
+            window_start: start,
             ends_at: end,
             message: message.clone(),
         });
@@ -764,7 +777,6 @@ impl Engine {
         day: &DayTimings,
         tz: Tz,
         now: DateTime<Tz>,
-        events: &[PlannedEvent],
     ) {
         let mode_24h = self.settings.time_format.is_24h();
         let fmt = |d: &DateTime<Tz>| alarm::fmt_time(d, mode_24h);
@@ -773,12 +785,20 @@ impl Engine {
 
         let (l1, l2, tooltip, done_label, done_enabled) =
             if let Some(active) = &self.active_alarm {
+                let title = active.prayer.title();
+                let line = match active.kind {
+                    AlarmKind::GetReady => format!("⏰ Get ready — {title}"),
+                    AlarmKind::PreEnd => format!("⚠️ {title} is ending"),
+                    AlarmKind::Start | AlarmKind::Snooze => format!("⏰ {title} — prayer time"),
+                };
+                // Like the popup: nothing to mark before the prayer starts.
+                let started = now >= active.window_start;
                 (
-                    format!("⏰ {} — prayer time", active.prayer.title()),
+                    line,
                     active.message.body.clone(),
-                    format!("Prayer Times — {} alarm", active.prayer.title()),
-                    format!("✓ Mark {} done", active.prayer.title()),
-                    true,
+                    format!("Prayer Times — {title} alarm"),
+                    format!("✓ Mark {title} done"),
+                    started,
                 )
             } else if let Some(next) = &next {
                 let target = if next.is_current {
@@ -817,10 +837,9 @@ impl Engine {
             };
 
         // Suppress the "mark done" item when there is nothing left to mark.
-        let (done_label, done_enabled) = match next {
-            Some(_) => (done_label, done_enabled && !events.is_empty()),
-            None => (done_label, false),
-        };
+        // Based on the featured prayer, not on alarms: it works with every
+        // alarm switched off.
+        let done_enabled = done_enabled && next.is_some();
 
         self.apply_tray(l1, l2, tooltip, done_enabled, done_label);
     }
@@ -956,6 +975,12 @@ pub fn tray_mark_done(app: &AppHandle) {
     let Ok(mut engine) = shared.engine.lock() else {
         return;
     };
+    // A dev preview is only closed: it must never mark a real prayer done.
+    if engine.showing_preview() {
+        engine.alarm_dismiss();
+        engine.tick();
+        return;
+    }
     if let Some(prayer) = engine.next_or_current_prayer() {
         engine.set_prayer_done(prayer, true);
         engine.tick();

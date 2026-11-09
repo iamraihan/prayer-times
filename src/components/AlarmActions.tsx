@@ -3,7 +3,7 @@ import { Check } from "lucide-react";
 import { Button } from "./ui/Button";
 import { alarmDismiss, alarmDone, alarmSnooze } from "../lib/actions";
 import { cn } from "../lib/cn";
-import type { AlarmKind, AppState, Prayer } from "../lib/types";
+import type { ActiveAlarm, AlarmKind, AppState, Prayer } from "../lib/types";
 
 const SNOOZE_PRESETS = [5, 10, 15, 30];
 
@@ -156,6 +156,21 @@ export function AlarmActions({
       )}
     </div>
   );
+}
+
+/** Whether the alarm still counts down to the user's prayer time (a Get
+ * ready, or a snooze due before it) rather than to the window's end. */
+export function countsToPrayer(alarm: ActiveAlarm, now: number): boolean {
+  if (alarm.kind === "getReady") return true;
+  const prayAt = Date.parse(alarm.prayAt);
+  return alarm.kind === "snooze" && !isNaN(prayAt) && now < prayAt;
+}
+
+/** Only a Get ready or a snooze can ring before the window opens; the others
+ * ring inside it by construction. */
+export function alarmBeforeStart(state: AppState | null, alarm: ActiveAlarm, now: number): boolean {
+  const early = alarm.kind === "getReady" || alarm.kind === "snooze";
+  return early && beforeWindowStart(state, alarm.prayer, now);
 }
 
 /** Whether `prayer`'s window has not opened yet at `now` (from the

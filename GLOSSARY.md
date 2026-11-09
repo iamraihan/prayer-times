@@ -63,7 +63,7 @@ When the user actually prays a prayer: its start time, or a set number of minute
 _Avoid_: Jamaat time, iqamah (in code), delay
 
 **Get-Ready Alarm**:
-An optional heads-up a set number of minutes (at most an hour) before the Own Prayer Time ("Asr in 10 minutes"), shown as "Get ready" in the UI. It never rings before the Prayer Day's calendar date begins, and it can't mark the prayer Done.
+An optional heads-up a set number of minutes (at most an hour) before the Own Prayer Time ("Asr in 10 minutes"), shown as "Get ready" in the UI. It never rings before its Prayer Day begins. Before the window opens it offers only "Got it"; inside the window "Got it" leads and Done is a secondary choice.
 _Avoid_: Early alarm, pre-alarm
 
 **Main Alarm**:

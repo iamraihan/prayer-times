@@ -82,7 +82,12 @@ export function SettingsPage() {
     const prayMin = Math.max(startMin, Math.min(startMin + after, endMin - 5));
     const clock = (total: number) =>
       fmtHourMinute(Math.floor(total / 60) % 24, total % 60, mode);
-    if (prayMin === startMin) return `Starts ${clock(startMin)} · you pray at the start`;
+    if (prayMin === startMin) {
+      // Minutes set, but the window is too short to move into (<= 5 min).
+      return after > 0
+        ? `Starts ${clock(startMin)} · you pray at the start (its time is too short to move)`
+        : `Starts ${clock(startMin)} · you pray at the start`;
+    }
     const clamped = prayMin < startMin + after;
     return `Starts ${clock(startMin)} · you pray ${clock(prayMin)}${
       clamped ? " (kept 5 min before its time ends)" : ""
