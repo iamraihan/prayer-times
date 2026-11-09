@@ -439,7 +439,7 @@ export function SettingsPage() {
             onClick={() => void testSound(draft.soundVolume)}
             aria-label="Play the alarm tone"
           >
-            <Volume2 className="h-4 w-4" aria-hidden /> Test
+            <Volume2 className="h-4 w-4" aria-hidden /> Play tone
           </Button>
         </SettingRow>
         <SettingRow
@@ -455,38 +455,33 @@ export function SettingsPage() {
             <FolderOpen className="h-3.5 w-3.5" aria-hidden /> Choose file…
           </Button>
         </SettingRow>
+        <SettingRow
+          label="Preview an alarm"
+          hint="Shows the popup, notification and sound as they'll appear. Nothing is marked done or snoozed."
+        >
+          {(
+            [
+              ["getReady", "Get ready"],
+              ["start", "Prayer time"],
+              ["preEnd", "Don't miss it"],
+            ] as const
+          ).map(([kind, label]) => (
+            <Button
+              key={kind}
+              size="sm"
+              variant="ghost"
+              onClick={() => void previewAlarm(kind).catch((e) => setToneError(friendlyError(e)))}
+            >
+              {label}
+            </Button>
+          ))}
+        </SettingRow>
         {toneError && (
           <p role="alert" className="px-4 py-3 text-[13px] text-red-300">
             {toneError}
           </p>
         )}
       </Section>
-
-      {import.meta.env.DEV && (
-        <Section
-          title="Developer"
-          description="Only in development builds. Shows a pretend alarm; nothing is marked done or snoozed."
-        >
-          <SettingRow label="Preview alarm" hint="Uses your sound, popup and notification settings">
-            {(
-              [
-                ["getReady", "Get ready"],
-                ["start", "Prayer time"],
-                ["preEnd", "Don't miss it"],
-              ] as const
-            ).map(([kind, label]) => (
-              <Button
-                key={kind}
-                size="sm"
-                variant="ghost"
-                onClick={() => void previewAlarm(kind).catch((e) => setToneError(friendlyError(e)))}
-              >
-                {label}
-              </Button>
-            ))}
-          </SettingRow>
-        </Section>
-      )}
 
       <Section title="General">
         <SettingRow label="Open at login" hint="Starts quietly in the tray when you sign in">

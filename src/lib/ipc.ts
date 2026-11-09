@@ -42,7 +42,7 @@ interface Commands {
   alarm_done: [NoArgs, AppState];
   alarm_snooze: [{ minutes: number }, AppState];
   alarm_dismiss: [NoArgs, AppState];
-  /** Dev builds only; release builds reject it. */
+  /** A pretend alarm for Settings → "Preview an alarm". */
   preview_alarm: [{ kind: AlarmKind }, AppState];
   test_sound: [{ volume: number | null }, void];
   set_alarm_tone: [{ path: string }, AppState];
