@@ -44,8 +44,17 @@ jobs:
       - name: Type-check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
+      # Regenerate the ts-rs bindings from scratch so a deleted or renamed
+      # Rust type shows up as a deleted file in the check below.
+      - name: Clear generated TypeScript bindings
+        if: runner.os == 'Linux'
+        run: rm -rf src/lib/bindings
+
+      # Run from src-tauri/ so cargo picks up src-tauri/.cargo/config.toml
+      # (it tells ts-rs where to write the TypeScript bindings).
       - name: Rust unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        working-directory: src-tauri
+        run: cargo test
 
       # `cargo test` regenerates src/lib/bindings from the Rust DTOs (ts-rs).
       # Any diff means someone changed a Rust type without committing the

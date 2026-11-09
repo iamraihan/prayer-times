@@ -38,25 +38,14 @@ const ALARM_AUTO_STOP_SECS: i64 = 2 * 60;
 /// Minimum wait between retries of a failed month fetch.
 const RETRY_AFTER: StdDuration = StdDuration::from_secs(60);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum AlarmKind {
     Start,
     Reminder,
     PreEnd,
     Snooze,
-}
-
-impl AlarmKind {
-    pub fn id(self) -> &'static str {
-        match self {
-            AlarmKind::Start => "start",
-            AlarmKind::Reminder => "reminder",
-            AlarmKind::PreEnd => "preEnd",
-            AlarmKind::Snooze => "snooze",
-        }
-    }
 }
 
 impl From<EventKind> for AlarmKind {

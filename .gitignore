@@ -25,4 +25,7 @@ src-tauri/target
 *.sw?
 
 # Machine-specific: redirects build output to E: on the dev machine
-.cargo/config.toml
+# (root only — src-tauri/.cargo/config.toml is shared and tracked)
+/.cargo/config.toml
+# ts-rs output when `cargo test` runs outside src-tauri/ (wrong place)
+/src-tauri/bindings/

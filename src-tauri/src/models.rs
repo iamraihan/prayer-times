@@ -7,15 +7,16 @@ use std::collections::HashMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use ts_rs::TS;
 
 // ---------------------------------------------------------------------------
 // Core domain
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub enum Prayer {
     Fajr,
     Dhuhr,
@@ -54,9 +55,9 @@ impl Prayer {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct Location {
     pub city: String,
     /// Human-readable country name (display only).
@@ -69,8 +70,8 @@ pub struct Location {
 
 /// Juristic rule for when Asr starts. Numeric on the wire and in cache file
 /// names (the Aladhan `school` parameter): 0 = Standard, 1 = Hanafi.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, TS)]
-#[ts(export, type = "0 | 1")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(test, derive(TS), ts(export, type = "0 | 1"))]
 pub enum AsrSchool {
     /// Shafi'i, Maliki, Hanbali.
     #[default]
@@ -117,8 +118,8 @@ impl fmt::Display for AsrSchool {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, TS)]
-#[ts(export, type = "\"12h\" | \"24h\"")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(test, derive(TS), ts(export, type = "\"12h\" | \"24h\""))]
 pub enum TimeFormat {
     #[default]
     H12,
@@ -154,9 +155,9 @@ impl<'de> Deserialize<'de> for TimeFormat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct PrayerSettings {
     pub enabled: bool,
     /// Minutes to delay the prayer's main alarm after its start time.
@@ -181,8 +182,8 @@ impl PrayerSettings {
 /// One entry per prayer — a struct rather than a map so every prayer is
 /// always present (same JSON shape as a `{ "fajr": …, … }` map). A prayer
 /// missing from an older settings file gets its default.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct PrayerSettingsMap {
     #[serde(default = "PrayerSettingsMap::default_fajr")]
     pub fajr: PrayerSettings,
@@ -249,9 +250,9 @@ impl Default for PrayerSettingsMap {
 /// `serde(default)`: a field missing from an older settings file takes its
 /// default instead of failing the whole file (which would reset everything,
 /// location included).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct Settings {
     pub location: Option<Location>,
     /// Aladhan calculation method id.
@@ -293,9 +294,9 @@ impl Default for Settings {
 // DTOs pushed to the frontend
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct PrayerTimeDto {
     pub prayer: Prayer,
     /// "HH:MM" location-local
@@ -308,9 +309,9 @@ pub struct PrayerTimeDto {
     pub ends_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct DayTimingsDto {
     /// "YYYY-MM-DD" location-local
     pub date: String,
@@ -322,17 +323,17 @@ pub struct DayTimingsDto {
     pub from_cache: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct AlarmMessageDto {
     pub title: String,
     pub body: String,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct ActiveAlarmDto {
     pub id: String,
     pub prayer: Prayer,
@@ -343,18 +344,18 @@ pub struct ActiveAlarmDto {
     pub message: AlarmMessageDto,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct NextPrayerDto {
     pub prayer: Prayer,
     pub start_at: String,
     pub ends_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct AppStateDto {
     pub has_location: bool,
     pub settings: Settings,
@@ -367,17 +368,17 @@ pub struct AppStateDto {
     pub api_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct LocationPreviewDto {
     pub location: Location,
     pub day: DayTimingsDto,
 }
 
-#[derive(Debug, Clone, Deserialize, TS)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export)]
+#[cfg_attr(test, derive(TS), ts(export))]
 pub struct PreviewRequest {
     pub city: String,
     pub country: String,
