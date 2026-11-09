@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState, type InputHTMLAttributes } from "react";
 import {
   Check,
   Download,
@@ -42,7 +42,7 @@ export function SettingsPage() {
   const state = useAppState();
   const settings = state?.settings ?? null;
   const [draft, setDraft] = useState<Settings | null>(settings);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [toast, setToast] = useState<ToastData | null>(null);
   const [changingLocation, setChangingLocation] = useState(false);
   const [toneBusy, setToneBusy] = useState(false);
@@ -78,10 +78,9 @@ export function SettingsPage() {
   }
 
   // Rebase the draft whenever the backend pushes new settings (tone picked,
-  // volume saved, location changed…): fields the user hasn't edited take the
-  // new value, edited fields keep the user's pending change. Comparing the
-  // draft against the *new* settings (the old logic) left the draft stale
-  // after any instant change, e.g. a just-picked tone showed as "unsaved".
+  // a save landing, location changed…): fields the user hasn't edited since
+  // take the new value, an edit still waiting to be saved keeps the user's
+  // value.
   const prevSettings = useRef<Settings | null>(settings);
   useEffect(() => {
     const prev = prevSettings.current;
@@ -89,79 +88,75 @@ export function SettingsPage() {
     setDraft((d) => (d && prev && settings ? rebase(d, prev, settings) : d ?? settings));
   }, [settings]);
 
-  // Volume applies instantly (like the tone): debounce while dragging, then
-  // persist the *saved* settings + new volume so other pending draft edits
-  // aren't committed behind the user's back.
-  const volumeTimer = useRef<number | undefined>(undefined);
-  const latestSettings = useRef(settings);
-  latestSettings.current = settings;
-  useEffect(() => () => window.clearTimeout(volumeTimer.current), []);
+  // Every change applies instantly. Saves are serialized — one in flight, and
+  // whatever changed meanwhile goes out right after — so responses can't
+  // arrive out of order and revert a newer edit.
+  const saveTimer = useRef<number | undefined>(undefined);
+  const pending = useRef<Settings | null>(null);
+  const inFlight = useRef(false);
 
-  function changeVolume(volume: number) {
-    patch({ soundVolume: volume });
-    window.clearTimeout(volumeTimer.current);
-    volumeTimer.current = window.setTimeout(() => {
-      const base = latestSettings.current;
-      if (!base || base.soundVolume === volume) return;
-      updateSettings({ ...base, soundVolume: volume }).catch((e) =>
-        setToast({ kind: "error", message: `Couldn't save volume: ${String(e)}` }),
-      );
-    }, 300);
-  }
-
-  const dirty = useMemo(
-    () => Boolean(draft && settings && !sameJson(draft, settings)),
-    [draft, settings],
-  );
-
-  // A new edit while the "Saved" confirmation is showing invalidates it.
-  useEffect(() => {
-    if (dirty && saveState === "saved") setSaveState("idle");
-  }, [dirty, saveState]);
-
-  if (!draft || !settings) {
-    return (
-      <div className="p-6 text-sm text-slate-400">Loading settings…</div>
-    );
-  }
-
-  function patch(p: Partial<Settings>) {
-    setDraft((d) => (d ? { ...d, ...p } : d));
-  }
-
-  function patchPrayer(prayer: (typeof PRAYERS)[number], p: Partial<Settings["prayerSettings"][keyof Settings["prayerSettings"]]>) {
-    setDraft((d) =>
-      d
-        ? {
-            ...d,
-            prayerSettings: {
-              ...d.prayerSettings,
-              [prayer]: { ...d.prayerSettings[prayer], ...p },
-            },
-          }
-        : d,
-    );
-  }
-
-  async function save() {
-    if (!draft) return;
-    // The draft already carries the volume; a pending debounced volume save
-    // would otherwise fire with the old base and revert this save.
-    window.clearTimeout(volumeTimer.current);
+  async function flush() {
+    window.clearTimeout(saveTimer.current);
+    if (inFlight.current || !pending.current) return;
+    const next = pending.current;
+    pending.current = null;
+    inFlight.current = true;
     setSaveState("saving");
     try {
-      await updateSettings(draft);
-      setSaveState("saved");
-      setToast({ kind: "success", message: "Settings saved" });
-      // Revert the button label once the confirmation has been seen.
-      window.setTimeout(
-        () => setSaveState((s) => (s === "saved" ? "idle" : s)),
-        2500,
-      );
+      await updateSettings(next);
+      setSaveState(pending.current ? "saving" : "saved");
     } catch (e) {
-      setSaveState("idle");
+      // Keep the edit queued so Retry resends it.
+      pending.current ??= next;
+      setSaveState("error");
       setToast({ kind: "error", message: `Couldn't save settings: ${String(e)}` });
+    } finally {
+      inFlight.current = false;
     }
+    if (pending.current && saveTimer.current === undefined) void flush();
+  }
+
+  function queueSave(next: Settings, delayMs: number) {
+    pending.current = next;
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = undefined;
+      void flush();
+    }, delayMs);
+  }
+
+  // Leaving the page must not drop an edit still in its debounce window.
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => () => void flushRef.current(), []);
+
+  if (!draft || !settings) {
+    return <div className="p-6 text-sm text-slate-400">Loading settings…</div>;
+  }
+
+  /** Applies `p` now; `delayMs` debounces typing and dragging. */
+  function patch(p: Partial<Settings>, delayMs = 0) {
+    if (!draft) return;
+    const next = { ...draft, ...p };
+    setDraft(next);
+    queueSave(next, delayMs);
+  }
+
+  function patchPrayer(
+    prayer: Prayer,
+    p: Partial<Settings["prayerSettings"][Prayer]>,
+    delayMs = 0,
+  ) {
+    if (!draft) return;
+    patch(
+      {
+        prayerSettings: {
+          ...draft.prayerSettings,
+          [prayer]: { ...draft.prayerSettings[prayer], ...p },
+        },
+      },
+      delayMs,
+    );
   }
 
   // The tone applies immediately (file operation), outside the draft/Save flow.
@@ -198,7 +193,10 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-9 pb-6">
-      <h1 className="px-1 text-xl font-semibold tracking-[-0.01em] text-slate-50">Settings</h1>
+      <div className="flex items-baseline justify-between gap-4 px-1">
+        <h1 className="text-xl font-semibold tracking-[-0.01em] text-slate-50">Settings</h1>
+        <SaveStatus state={saveState} onRetry={() => void flush()} />
+      </div>
 
       <Section title="Location" description="Prayer times are calculated for this place.">
         <SettingRow
@@ -293,7 +291,6 @@ export function SettingsPage() {
         </SettingRow>
         <SettingRow
           label="Volume"
-          hint="Applies instantly"
           disabled={!draft.soundEnabled}
         >
           <div className="flex w-64 items-center gap-3">
@@ -301,7 +298,7 @@ export function SettingsPage() {
               aria-label="Alarm volume"
               disabled={!draft.soundEnabled}
               value={Math.round(draft.soundVolume * 100)}
-              onChange={(e) => changeVolume(Number(e.target.value) / 100)}
+              onChange={(e) => patch({ soundVolume: Number(e.target.value) / 100 }, 300)}
             />
             <span className="tnum w-9 text-right text-[13px] text-slate-400">
               {Math.round(draft.soundVolume * 100)}%
@@ -349,19 +346,14 @@ export function SettingsPage() {
               hint={ps.enabled ? (reminderHint(p) ?? "Alarms on") : "Alarms off"}
               disabled={!ps.enabled}
             >
-              <UnitInput
-                unit="min"
+              <MinutesInput
                 min={1}
                 max={600}
+                allowEmpty
                 placeholder="—"
                 disabled={!ps.enabled}
-                value={ps.reminderMinutes ?? ""}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  patchPrayer(p, {
-                    reminderMinutes: raw === "" ? null : clamp(Number(raw), 1, 600),
-                  });
-                }}
+                value={ps.reminderMinutes}
+                onCommit={(v) => patchPrayer(p, { reminderMinutes: v }, 600)}
                 aria-label={`Minutes after ${PRAYER_LABELS[p]} starts`}
               />
               <Toggle
@@ -376,13 +368,12 @@ export function SettingsPage() {
           label="Before-end warning"
           hint="A final alarm if a prayer isn't marked done before its time ends"
         >
-          <UnitInput
-            unit="min"
+          <MinutesInput
             min={1}
             max={120}
             disabled={!draft.preEndWarningEnabled}
             value={draft.preEndWarningMinutes}
-            onChange={(e) => patch({ preEndWarningMinutes: clamp(Number(e.target.value), 1, 120) })}
+            onCommit={(v) => v !== null && patch({ preEndWarningMinutes: v }, 600)}
             aria-label="Minutes before the prayer time ends"
           />
           <Toggle
@@ -394,7 +385,7 @@ export function SettingsPage() {
       </Section>
 
       <Section title="General">
-        <SettingRow label="Open at login" hint="Starts quietly in the tray when you sign in. Applies instantly.">
+        <SettingRow label="Open at login" hint="Starts quietly in the tray when you sign in">
           <Toggle label="Open at login" checked={autostart} onChange={(v) => void toggleAutostart(v)} />
         </SettingRow>
       </Section>
@@ -480,34 +471,6 @@ export function SettingsPage() {
         </div>
       </footer>
 
-      {(dirty || saveState === "saving") && (
-        <div className="fade-in sticky bottom-3 z-30">
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-900/95 py-2 pr-2 pl-4 shadow-[0_16px_40px_-12px_rgb(0_0_0/0.7)] backdrop-blur">
-            <p className="text-sm text-slate-300">You have unsaved changes</p>
-            <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                disabled={saveState === "saving"}
-                onClick={() => {
-                  window.clearTimeout(volumeTimer.current);
-                  setDraft(settings);
-                }}
-              >
-                Discard
-              </Button>
-              <Button variant="primary" disabled={saveState === "saving"} onClick={() => void save()}>
-                {saveState === "saving" ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                ) : (
-                  <Check className="h-4 w-4" aria-hidden />
-                )}
-                {saveState === "saving" ? "Saving…" : "Save changes"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {changingLocation && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/95">
           <SetupWizard onFinished={() => setChangingLocation(false)} onCancel={() => setChangingLocation(false)} />
@@ -517,11 +480,6 @@ export function SettingsPage() {
       {toast && <Toast toast={toast} onDismiss={() => setToast(null)} />}
     </div>
   );
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  if (!Number.isFinite(v)) return lo;
-  return Math.min(hi, Math.max(lo, Math.round(v)));
 }
 
 // Every Settings field, checked by the compiler: adding a field to
@@ -564,4 +522,95 @@ function keepEdit<K extends keyof Settings>(
 // JSON comparison is exact.
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function SaveStatus({
+  state,
+  onRetry,
+}: {
+  state: "idle" | "saving" | "saved" | "error";
+  onRetry: () => void;
+}) {
+  return (
+    <p aria-live="polite" className="flex items-center gap-1.5 text-[13px] text-slate-500">
+      {state === "saving" && (
+        <>
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> Saving…
+        </>
+      )}
+      {state === "saved" && (
+        <>
+          <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden /> All changes saved
+        </>
+      )}
+      {state === "error" && (
+        <>
+          <span className="text-red-300">Not saved.</span>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="text-slate-300 underline underline-offset-2 hover:text-slate-100"
+          >
+            Retry
+          </button>
+        </>
+      )}
+    </p>
+  );
+}
+
+/**
+ * Minutes box that keeps whatever is typed and only commits valid values
+ * (whole numbers in range, or empty when `allowEmpty`). Leaving the box
+ * shows the last committed value again, so a half-typed or out-of-range
+ * entry never gets saved.
+ */
+function MinutesInput({
+  value,
+  min,
+  max,
+  allowEmpty,
+  onCommit,
+  ...rest
+}: {
+  value: number | null;
+  min: number;
+  max: number;
+  allowEmpty?: boolean;
+  onCommit: (value: number | null) => void;
+} & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "min" | "max">) {
+  const shown = value === null ? "" : String(value);
+  const [text, setText] = useState(shown);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setText(shown);
+  }, [shown]);
+
+  function parse(raw: string): number | null | undefined {
+    const t = raw.trim();
+    if (t === "") return allowEmpty ? null : undefined;
+    const n = Number(t);
+    return Number.isInteger(n) && n >= min && n <= max ? n : undefined;
+  }
+
+  return (
+    <UnitInput
+      unit="min"
+      min={min}
+      max={max}
+      value={text}
+      aria-invalid={parse(text) === undefined}
+      onFocus={() => (focused.current = true)}
+      onBlur={() => {
+        focused.current = false;
+        setText(shown);
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = parse(e.target.value);
+        if (v !== undefined) onCommit(v);
+      }}
+      {...rest}
+    />
+  );
 }
