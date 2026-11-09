@@ -61,7 +61,7 @@ impl From<EventKind> for AlarmKind {
     }
 }
 
-/// Alarm ids of dev-only previews (`preview_alarm`) start with this. A
+/// Alarm ids of previews (`preview_alarm`) start with this. A
 /// preview's actions never mark a prayer done or snooze it.
 const PREVIEW_ID_PREFIX: &str = "preview|";
 
@@ -453,7 +453,7 @@ impl Engine {
         self.active_alarm.as_ref().is_some_and(|a| is_preview(&a.id))
     }
 
-    /// Dev only: shows a pretend alarm of `kind` for the featured prayer
+    /// Settings preview: shows a pretend alarm of `kind` for the featured prayer
     /// through the normal channels (sound, notification, popup), so the
     /// design can be checked without waiting for a real one. It touches no
     /// Done marks, snoozes or fired ids.

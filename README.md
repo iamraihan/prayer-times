@@ -76,6 +76,11 @@ Each alarm shows **all three channels** (each can be toggled in Settings):
    auto-stops after 2 minutes if unanswered,
 3. a small always-on-top popup with the actions below.
 
+To see exactly what will ring, use Settings → How alarms ring → **Preview an
+alarm** (Get ready / Prayer time / Don't miss it): it shows the real popup,
+notification and sound, and marks nothing done. **Play tone** next to the
+volume only plays the sound for a couple of seconds.
+
 From the popup, the in-app banner, or the tray menu you can:
 
 - **✓ Mark as done** — silences *all remaining alarms for that prayer today*
