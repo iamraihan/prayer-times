@@ -39,6 +39,11 @@ export async function alarmDismiss(): Promise<void> {
   apply(await api.alarmDismiss());
 }
 
+/** Imports a backup file and applies the returned state. */
+export async function importBackup(path: string, includeSettings: boolean): Promise<void> {
+  apply(await api.importBackup(path, includeSettings));
+}
+
 /** Dev builds only: shows a pretend alarm to check the popup design. */
 export async function previewAlarm(kind: AlarmKind): Promise<void> {
   apply(await api.previewAlarm(kind));

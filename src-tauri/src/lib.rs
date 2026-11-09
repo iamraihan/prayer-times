@@ -14,10 +14,12 @@
 //! - `commands`  — IPC commands
 
 mod alarm;
+mod backup;
 mod aladhan;
 mod commands;
 mod engine;
 mod geocode;
+mod history;
 mod models;
 mod runtime;
 mod schedule;
@@ -100,6 +102,11 @@ pub fn run() {
             commands::save_location,
             commands::update_settings,
             commands::set_prayer_done,
+            commands::get_history_month,
+            commands::set_history_entry,
+            commands::export_backup,
+            commands::preview_backup,
+            commands::import_backup,
             commands::alarm_done,
             commands::alarm_snooze,
             commands::alarm_dismiss,

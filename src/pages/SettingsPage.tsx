@@ -19,6 +19,7 @@ import { Toast, type ToastData } from "../components/ui/Toast";
 import { Toggle } from "../components/ui/Toggle";
 import { Select, SliderField, UnitInput } from "../components/ui/fields";
 import { SetupWizard } from "../components/SetupWizard";
+import { BackupControls } from "../components/BackupControls";
 import { useAppState } from "../store/useAppStore";
 import { IS_MAC, useUpdateStore } from "../store/useUpdateStore";
 import {
@@ -34,6 +35,7 @@ import { METHODS } from "../lib/methods";
 import { PRAYERS, PRAYER_LABELS, type Prayer, type Settings } from "../lib/types";
 import { cn } from "../lib/cn";
 import { fmtHourMinute, parseHM } from "../lib/time";
+import { friendlyError } from "../lib/errors";
 
 /**
  * Settings are edited as a local draft and pushed to the backend on Save.
@@ -55,14 +57,17 @@ export function SettingsPage() {
     void getAutostart().then(setAutostart).catch(() => undefined);
   }, []);
 
+  const [autostartError, setAutostartError] = useState<string | null>(null);
+
   // Applies instantly via the OS launcher entry; reverts on failure.
   async function toggleAutostart(enabled: boolean) {
     setAutostart(enabled);
+    setAutostartError(null);
     try {
       setAutostart(await setAutostartCmd(enabled));
     } catch (e) {
       setAutostart(!enabled);
-      setToneError(String(e));
+      setAutostartError(`Couldn't change this. ${friendlyError(e)}`);
     }
   }
 
@@ -126,7 +131,7 @@ export function SettingsPage() {
       // Keep the edit queued so Retry resends it.
       pending.current ??= next;
       setSaveState("error");
-      setToast({ kind: "error", message: `Couldn't save settings: ${String(e)}` });
+      setToast({ kind: "error", message: `Couldn't save settings. ${friendlyError(e)}` });
     } finally {
       inFlight.current = false;
     }
@@ -188,7 +193,7 @@ export function SettingsPage() {
       setToneBusy(true);
       await setAlarmTone(picked);
     } catch (e) {
-      setToneError(String(e));
+      setToneError(friendlyError(e));
     } finally {
       setToneBusy(false);
     }
@@ -200,7 +205,7 @@ export function SettingsPage() {
     try {
       await resetAlarmTone();
     } catch (e) {
-      setToneError(String(e));
+      setToneError(friendlyError(e));
     } finally {
       setToneBusy(false);
     }
@@ -474,7 +479,7 @@ export function SettingsPage() {
                 key={kind}
                 size="sm"
                 variant="ghost"
-                onClick={() => void previewAlarm(kind).catch((e) => setToneError(String(e)))}
+                onClick={() => void previewAlarm(kind).catch((e) => setToneError(friendlyError(e)))}
               >
                 {label}
               </Button>
@@ -487,6 +492,12 @@ export function SettingsPage() {
         <SettingRow label="Open at login" hint="Starts quietly in the tray when you sign in">
           <Toggle label="Open at login" checked={autostart} onChange={(v) => void toggleAutostart(v)} />
         </SettingRow>
+        {autostartError && (
+          <p role="alert" className="px-4 py-3 text-[13px] text-red-300">
+            {autostartError}
+          </p>
+        )}
+        <BackupControls />
       </Section>
 
       <Section

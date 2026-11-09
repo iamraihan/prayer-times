@@ -10,7 +10,7 @@ use tauri::{AppHandle, State};
 use crate::aladhan::{self, FetchParams, Place};
 use crate::engine::{self, Engine};
 use crate::models::{
-    AppStateDto, AsrSchool, CityMatchDto, Coordinates, Location, LocationPreviewDto, Prayer,
+    AppStateDto, BackupPreviewDto, HistoryMonthDto, HistoryStatus, AsrSchool, CityMatchDto, Coordinates, Location, LocationPreviewDto, Prayer,
     PreviewRequest, Settings,
 };
 use crate::{geocode, timeutil, tzcountry};
@@ -176,17 +176,89 @@ pub fn update_settings(
     Ok(dto)
 }
 
+/// Marks or unmarks a prayer for the current Prayer Day. Marking a prayer
+/// that hasn't started yet is refused.
 #[tauri::command]
 pub fn set_prayer_done(
     shared: State<'_, SharedEngine>,
     prayer: Prayer,
     done: bool,
-) -> AppStateDto {
+) -> Result<AppStateDto, String> {
     with_engine(&shared, |engine| {
-        engine.set_prayer_done(prayer, done);
+        engine.set_prayer_done(prayer, done)?;
         engine.tick();
-        engine.snapshot()
+        Ok(engine.snapshot())
     })
+}
+
+/// The History tab's month (`month` is 1–12).
+#[tauri::command]
+pub fn get_history_month(shared: State<'_, SharedEngine>, year: i32, month: u32) -> HistoryMonthDto {
+    with_engine(&shared, |engine| engine.history_month(year, month))
+}
+
+/// Sets one prayer on `day` (`YYYY-MM-DD`) from the History tab; `None`
+/// clears it. Returns that day's month.
+#[tauri::command]
+pub fn set_history_entry(
+    shared: State<'_, SharedEngine>,
+    day: String,
+    prayer: Prayer,
+    status: Option<HistoryStatus>,
+) -> Result<HistoryMonthDto, String> {
+    let date = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d")
+        .map_err(|_| format!("invalid day: {day}"))?;
+    let dto = with_engine(&shared, |engine| {
+        engine.set_history_entry(date, prayer, status)?;
+        engine.tick();
+        Ok::<_, String>(engine.history_month(chrono::Datelike::year(&date), chrono::Datelike::month(&date)))
+    })?;
+    Ok(dto)
+}
+
+/// Backups larger than this are refused (decades of history fit in ~2 MB).
+const MAX_BACKUP_BYTES: u64 = 20 * 1024 * 1024;
+
+fn read_backup(path: &str) -> Result<crate::backup::BackupFile, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|e| format!("couldn't open the file: {e}"))?
+        .len();
+    if size > MAX_BACKUP_BYTES {
+        return Err("This file is too large to be a Prayer Times backup".into());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("couldn't read the file: {e}"))?;
+    crate::backup::parse(&text)
+}
+
+/// Writes settings + history to `path` (chosen with the save dialog).
+#[tauri::command]
+pub fn export_backup(shared: State<'_, SharedEngine>, path: String) -> Result<(), String> {
+    let text = with_engine(&shared, |engine| engine.export_backup())?;
+    std::fs::write(&path, text).map_err(|e| format!("couldn't write the backup: {e}"))
+}
+
+/// What importing `path` would bring; changes nothing.
+#[tauri::command]
+pub fn preview_backup(path: String) -> Result<BackupPreviewDto, String> {
+    Ok(crate::backup::preview(&read_backup(&path)?))
+}
+
+/// Merges `path`'s history (nothing is deleted) and, when
+/// `include_settings`, applies its settings.
+#[tauri::command]
+pub fn import_backup(
+    shared: State<'_, SharedEngine>,
+    path: String,
+    include_settings: bool,
+) -> Result<AppStateDto, String> {
+    let file = read_backup(&path)?;
+    let dto = with_engine(&shared, |engine| {
+        engine.import_backup(file, include_settings)?;
+        engine.tick();
+        Ok::<_, String>(engine.snapshot())
+    })?;
+    engine::wake_up(&shared);
+    Ok(dto)
 }
 
 #[tauri::command]

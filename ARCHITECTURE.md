@@ -34,6 +34,8 @@ windows are hidden.
 │  alarm.rs     notification + always-on-top popup window        │      │
 │  models.rs    domain + DTOs (camelCase on the wire)            │      │
 │  settings.rs / runtime.rs   JSON persistence                   │      │
+│  history.rs   SQLite prayer history + pure streak/merge rules  │      │
+│  backup.rs    versioned JSON backup (settings + history)       │      │
 │  timeutil.rs  location-timezone-aware datetime helpers         │      │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -100,9 +102,12 @@ Rules of thumb:
   a typed wrapper in `lib/ipc.ts`, call it from the page.
 - **New alarm kind** (e.g. sunrise reminder): extend `EventKind` in
   `schedule.rs` + the message builder in `engine.rs`; nothing else changes.
-- **Prayer history**: `runtime.rs` already keys done marks per day — swap
-  the single `runtime.json` object for an append-only history file and add
-  a summary command.
+- **Prayer history** (done): `history.rs` keeps `history.db` (SQLite). The
+  engine's in-memory Done marks stay authoritative for the current Prayer Day
+  and are mirrored into it; `schedule::missed_now` records a prayer as missed
+  only when its window closed while the app was running (within the 10-min
+  grace), so days the app didn't see read as "no record". Design:
+  `docs/superpowers/specs/2026-11-09-prayer-history-design.md`.
 - **Autostart on login**: add `tauri-plugin-autostart`, init in `lib.rs`,
   toggle in Settings.
 - **Unit tests**: run `cargo test` in `src-tauri/` (CI runs it on all three

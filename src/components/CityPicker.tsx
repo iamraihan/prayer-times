@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Check, Loader2, MapPin, Search } from "lucide-react";
 import { searchCities } from "../lib/actions";
 import type { CityMatch } from "../lib/types";
 import { cn } from "../lib/cn";
+import { friendlyError } from "../lib/errors";
 
 /** What the user chose: a real place from search (exact coordinates), or —
  * only when search can't find their town — the name as typed. */
@@ -36,6 +37,9 @@ export function CityPicker({ countryCode, countryName, value, onChange }: CityPi
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const seq = useRef(0);
+  const inputId = useId();
+  const listId = useId();
+  const optionId = (i: number) => `${listId}-opt-${i}`;
 
   // A new country invalidates the text and any choice.
   const firstCountry = useRef(countryCode);
@@ -71,7 +75,7 @@ export function CityPicker({ countryCode, countryName, value, onChange }: CityPi
         .catch((e: unknown) => {
           if (id !== seq.current) return;
           setResults([]);
-          setSearchError(String(e));
+          setSearchError(friendlyError(e));
         })
         .finally(() => {
           if (id !== seq.current) return;
@@ -98,20 +102,23 @@ export function CityPicker({ countryCode, countryName, value, onChange }: CityPi
 
   return (
     <div className="relative">
-      <label className="mb-1.5 block text-xs font-medium text-slate-300">City</label>
+      <label htmlFor={inputId} className="mb-1.5 block text-[13px] font-medium text-slate-300">
+        City
+      </label>
       <div
         className={cn(
-          "flex h-10 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/60 px-3",
+          "flex h-9 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/50 px-3 transition-colors hover:border-slate-600",
           "focus-within:border-emerald-500",
           !countryCode && "opacity-50",
         )}
       >
         {value?.kind === "picked" && showingChoice ? (
-          <Check className="h-4 w-4 shrink-0 text-emerald-400" />
+          <Check className="h-4 w-4 shrink-0 text-emerald-400" aria-label="City selected" />
         ) : (
-          <Search className="h-4 w-4 shrink-0 text-slate-500" />
+          <Search className="h-4 w-4 shrink-0 text-slate-500" aria-hidden />
         )}
         <input
+          id={inputId}
           value={query}
           disabled={!countryCode}
           placeholder={countryCode ? "Start typing your city…" : "Select a country first"}
@@ -134,12 +141,15 @@ export function CityPicker({ countryCode, countryName, value, onChange }: CityPi
               const match = results[active];
               if (match) pick(match);
             } else if (e.key === "Escape") {
+              e.preventDefault();
               setOpen(false);
             }
           }}
           role="combobox"
           aria-expanded={open && results.length > 0}
           aria-autocomplete="list"
+          aria-controls={listId}
+          aria-activedescendant={open && results[active] && !showingChoice ? optionId(active) : undefined}
           className="w-full bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
         />
         {searching && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-slate-500" />}
@@ -149,24 +159,28 @@ export function CityPicker({ countryCode, countryName, value, onChange }: CityPi
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <ul
+            id={listId}
             role="listbox"
+            aria-label="Matching cities"
             className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 py-1 shadow-xl shadow-black/40"
           >
             {results.map((m, i) => (
-              <li key={`${m.latitude},${m.longitude}`} role="option" aria-selected={i === active}>
-                <button
-                  type="button"
-                  onMouseEnter={() => setActive(i)}
-                  onClick={() => pick(m)}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-slate-200",
-                    i === active && "bg-slate-800",
-                  )}
-                >
-                  <MapPin className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                  <span>{m.name}</span>
-                  {m.region && <span className="text-xs text-slate-500">{m.region}</span>}
-                </button>
+              <li
+                key={`${m.latitude},${m.longitude}`}
+                id={optionId(i)}
+                role="option"
+                aria-selected={i === active}
+                onMouseEnter={() => setActive(i)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pick(m)}
+                className={cn(
+                  "flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm text-slate-200",
+                  i === active && "bg-slate-800",
+                )}
+              >
+                <MapPin className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
+                <span>{m.name}</span>
+                {m.region && <span className="text-xs text-slate-500">{m.region}</span>}
               </li>
             ))}
           </ul>
@@ -174,7 +188,7 @@ export function CityPicker({ countryCode, countryName, value, onChange }: CityPi
       )}
 
       {value?.kind === "picked" && showingChoice && (
-        <p className="mt-1.5 text-xs text-slate-500">
+        <p className="mt-1.5 text-[13px] text-slate-500">
           {Math.abs(value.match.latitude).toFixed(2)}°{value.match.latitude >= 0 ? "N" : "S"},{" "}
           {Math.abs(value.match.longitude).toFixed(2)}°{value.match.longitude >= 0 ? "E" : "W"} ·{" "}
           {value.match.timezone}
@@ -182,14 +196,14 @@ export function CityPicker({ countryCode, countryName, value, onChange }: CityPi
       )}
 
       {value?.kind === "typed" && showingChoice && (
-        <p className="mt-1.5 text-xs text-amber-400/90">
+        <p className="mt-1.5 text-[13px] text-amber-300/90">
           Using “{value.name}” as typed. The times service will look it up by name, so check the
           preview carefully.
         </p>
       )}
 
       {!value && (noMatch || searchError) && (
-        <div className="mt-1.5 space-y-1 text-xs">
+        <div className="mt-1.5 space-y-1 text-[13px]">
           <p className="text-amber-400/90">
             {searchError
               ? "City search is unavailable right now."

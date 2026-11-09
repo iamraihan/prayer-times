@@ -88,8 +88,10 @@ function PrayerRow({ time, mode, done, isNext, now, after }: PrayerRowProps) {
       >
         <DoneCheckbox
           checked={done}
+          // It can't have been prayed before it starts.
+          disabledHint={!done && !started ? `You can mark it after it starts at ${fmtHM(time.start, mode)}` : null}
           label={`${PRAYER_LABELS[prayer]} prayed`}
-          onChange={(v) => void setPrayerDone(prayer, v)}
+          onChange={(v) => void setPrayerDone(prayer, v).catch(() => {})}
         />
         <PrayerIcon
           prayer={prayer}
@@ -113,7 +115,7 @@ function PrayerRow({ time, mode, done, isNext, now, after }: PrayerRowProps) {
           <p className="tnum mt-0.5 text-[13px] text-slate-500">
             until {fmtHM(time.ends, mode)}
             {status === "current" && <span className="text-emerald-300/90"> · now</span>}
-            {status === "past" && <span className="text-amber-300/80"> · time passed</span>}
+            {status === "past" && <span className="text-slate-400"> · time ended</span>}
           </p>
         </div>
         <span
@@ -152,26 +154,34 @@ function wallClockToday(now: number, hm: string): number {
 
 function DoneCheckbox({
   checked,
+  disabledHint,
   label,
   onChange,
 }: {
   checked: boolean;
+  /** Set (with the reason) while the prayer can't be marked yet. */
+  disabledHint: string | null;
   label: string;
   onChange: (v: boolean) => void;
 }) {
+  const disabled = disabledHint !== null;
   return (
     <button
       type="button"
       role="checkbox"
       aria-checked={checked}
-      aria-label={label}
-      title={checked ? "Marked as prayed" : "Mark as prayed"}
+      aria-label={disabled ? `${label}: ${disabledHint}` : label}
+      aria-disabled={disabled}
+      disabled={disabled}
+      title={disabledHint ?? (checked ? "Marked as prayed" : "Mark as prayed")}
       onClick={() => onChange(!checked)}
       className={cn(
         "flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] border transition-colors duration-150",
         checked
           ? "border-emerald-600 bg-emerald-600 text-white"
-          : "border-slate-600 hover:border-emerald-400",
+          : disabled
+            ? "cursor-not-allowed border-slate-700 border-dashed"
+            : "border-slate-600 hover:border-emerald-400",
       )}
     >
       {checked && <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden />}

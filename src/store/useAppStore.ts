@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "../lib/ipc";
 import type { AppState } from "../lib/types";
+import { friendlyError } from "../lib/errors";
 
 interface AppStore {
   state: AppState | null;
@@ -28,7 +29,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const s = await api.getState();
       set({ state: s, ready: true });
     } catch (e) {
-      set({ initError: String(e), ready: true });
+      set({ initError: friendlyError(e), ready: true });
       return;
     }
     // The backend pushes a fresh snapshot after every tick / state change.
