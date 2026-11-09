@@ -38,7 +38,7 @@ const ALARM_AUTO_STOP_SECS: i64 = 2 * 60;
 /// Minimum wait between retries of a failed month fetch.
 const RETRY_AFTER: StdDuration = StdDuration::from_secs(60);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub enum AlarmKind {
@@ -57,6 +57,14 @@ impl From<EventKind> for AlarmKind {
             EventKind::PreEnd => AlarmKind::PreEnd,
         }
     }
+}
+
+/// Alarm ids of dev-only previews (`preview_alarm`) start with this. A
+/// preview's actions never mark a prayer done or snooze it.
+const PREVIEW_ID_PREFIX: &str = "preview|";
+
+fn is_preview(id: &str) -> bool {
+    id.starts_with(PREVIEW_ID_PREFIX)
 }
 
 pub struct ActiveAlarmState {
@@ -256,7 +264,41 @@ impl Engine {
         self.dirty = true;
     }
 
+    fn showing_preview(&self) -> bool {
+        self.active_alarm.as_ref().is_some_and(|a| is_preview(&a.id))
+    }
+
+    /// Dev only: shows a pretend alarm of `kind` for the featured prayer
+    /// through the normal channels (sound, notification, popup), so the
+    /// design can be checked without waiting for a real one. It touches no
+    /// Done marks, snoozes or fired ids.
+    pub fn preview_alarm(&mut self, kind: AlarmKind) -> Result<(), String> {
+        let tz = self
+            .settings
+            .location
+            .as_ref()
+            .and_then(|l| timeutil::parse_tz(&l.timezone))
+            .ok_or("Set a location first")?;
+        let now = Utc::now().with_timezone(&tz);
+        let prayer = self
+            .compute_next(now, tz)
+            .map_or(Prayer::Dhuhr, |n| n.prayer);
+        let (pray_at, end) = match kind {
+            AlarmKind::GetReady => (now + Duration::minutes(10), now + Duration::minutes(90)),
+            AlarmKind::PreEnd => (now - Duration::minutes(50), now + Duration::minutes(10)),
+            AlarmKind::Start | AlarmKind::Snooze => (now, now + Duration::minutes(90)),
+        };
+        let id = format!("{PREVIEW_ID_PREFIX}{}", prayer.id());
+        self.fire(prayer, kind, pray_at, end, now, id.clone());
+        self.fired.remove(&id);
+        Ok(())
+    }
+
     pub fn alarm_done(&mut self) {
+        if self.showing_preview() {
+            self.clear_alarm();
+            return;
+        }
         let prayer = self.active_alarm.as_ref().map(|a| a.prayer);
         if let Some(prayer) = prayer {
             self.set_prayer_done(prayer, true);
@@ -265,7 +307,7 @@ impl Engine {
     }
 
     pub fn alarm_snooze(&mut self, minutes: i64) {
-        if let Some(alarm_state) = self.active_alarm.as_ref() {
+        if let Some(alarm_state) = self.active_alarm.as_ref().filter(|a| !is_preview(&a.id)) {
             let due = Utc::now() + Duration::minutes(minutes.clamp(1, 720));
             self.snoozes.insert(alarm_state.prayer, due);
             self.dirty = true;
@@ -980,6 +1022,18 @@ pub fn run_loop(app: AppHandle, wake: Arc<(Mutex<bool>, Condvar)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_ids_never_look_like_real_events() {
+        assert!(is_preview("preview|dhuhr"));
+        let real = schedule::event_id(
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 10).unwrap(),
+            Prayer::Dhuhr,
+            EventKind::Start,
+        );
+        assert!(!is_preview(&real));
+        assert!(!is_preview(&format!("{real}|snooze|x")));
+    }
 
     fn typed(city: &str, country: &str, code: &str, timezone: &str) -> Location {
         Location {

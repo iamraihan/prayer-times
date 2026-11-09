@@ -23,6 +23,7 @@ import { useAppState } from "../store/useAppStore";
 import { IS_MAC, useUpdateStore } from "../store/useUpdateStore";
 import {
   getAutostart,
+  previewAlarm,
   resetAlarmTone,
   setAlarmTone,
   setAutostart as setAutostartCmd,
@@ -81,9 +82,11 @@ export function SettingsPage() {
     const prayMin = Math.max(startMin, Math.min(startMin + after, endMin - 5));
     const clock = (total: number) =>
       fmtHourMinute(Math.floor(total / 60) % 24, total % 60, mode);
-    return prayMin === startMin
-      ? `Starts ${clock(startMin)} · you pray at the start`
-      : `Starts ${clock(startMin)} · you pray ${clock(prayMin)}`;
+    if (prayMin === startMin) return `Starts ${clock(startMin)} · you pray at the start`;
+    const clamped = prayMin < startMin + after;
+    return `Starts ${clock(startMin)} · you pray ${clock(prayMin)}${
+      clamped ? " (kept 5 min before its time ends)" : ""
+    }`;
   }
 
   // Rebase the draft whenever the backend pushes new settings (tone picked,
@@ -276,7 +279,114 @@ export function SettingsPage() {
         </SettingRow>
       </Section>
 
-      <Section title="Alarms" description="How you're alerted when an alarm rings.">
+      <Section
+        title="When you pray"
+        description="Set this if you pray later than the start, for example with your mosque. It follows the start time every day."
+      >
+        {PRAYERS.map((p) => {
+          const ps = draft.prayerSettings[p];
+          return (
+            <SettingRow
+              key={p}
+              label={PRAYER_LABELS[p]}
+              hint={ps.enabled ? prayHint(p) : "Alarms off for this prayer"}
+              disabled={!ps.enabled}
+            >
+              <MinutesInput
+                min={0}
+                max={600}
+                allowEmpty
+                placeholder="0"
+                disabled={!ps.enabled}
+                value={ps.prayAfterMinutes}
+                onCommit={(v) => patchPrayer(p, { prayAfterMinutes: v === 0 ? null : v }, 600)}
+                aria-label={`Minutes after ${PRAYER_LABELS[p]} starts that you pray`}
+              />
+              <span className="whitespace-nowrap text-[13px] text-slate-400">after start</span>
+            </SettingRow>
+          );
+        })}
+      </Section>
+
+      <Section
+        title="When alarms ring"
+        description="Turn on the alarms you want. They apply to every prayer."
+      >
+        <SettingRow
+          label="Get ready"
+          hint="Rings 5–60 min before you pray"
+          disabled={!draft.getReadyEnabled}
+        >
+          <MinutesInput
+            min={5}
+            max={60}
+            disabled={!draft.getReadyEnabled}
+            value={draft.getReadyMinutes}
+            onCommit={(v) => v !== null && patch({ getReadyMinutes: v }, 600)}
+            aria-label="Minutes before you pray"
+          />
+          <Toggle
+            label="Get ready"
+            checked={draft.getReadyEnabled}
+            onChange={(v) => patch({ getReadyEnabled: v })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Prayer time"
+          hint="Rings when you pray"
+          disabled={!draft.startAlarmEnabled}
+        >
+          <Toggle
+            label="Prayer time"
+            checked={draft.startAlarmEnabled}
+            onChange={(v) => patch({ startAlarmEnabled: v })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Don't miss it"
+          hint="Last call, 1–120 min before a prayer's time ends. Skipped once you mark it done."
+          disabled={!draft.preEndWarningEnabled}
+        >
+          <MinutesInput
+            min={1}
+            max={120}
+            disabled={!draft.preEndWarningEnabled}
+            value={draft.preEndWarningMinutes}
+            onCommit={(v) => v !== null && patch({ preEndWarningMinutes: v }, 600)}
+            aria-label="Minutes before the prayer time ends"
+          />
+          <Toggle
+            label="Don't miss it"
+            checked={draft.preEndWarningEnabled}
+            onChange={(v) => patch({ preEndWarningEnabled: v })}
+          />
+        </SettingRow>
+        <SettingRow label="Ring for" hint="Click a prayer to turn its alarms off">
+          <div role="group" aria-label="Prayers with alarms" className="flex flex-wrap gap-1.5">
+            {PRAYERS.map((p) => {
+              const on = draft.prayerSettings[p].enabled;
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => patchPrayer(p, { enabled: !on })}
+                  className={cn(
+                    "h-8 rounded-full border px-3 text-[13px] transition-colors",
+                    on
+                      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+                      : "border-slate-700 text-slate-500 hover:bg-slate-800 hover:text-slate-300",
+                  )}
+                >
+                  {PRAYER_LABELS[p]}
+                </button>
+              );
+            })}
+          </div>
+        </SettingRow>
+      </Section>
+
+      <Section title="How alarms ring" description="Applies to every alarm.">
         <SettingRow label="System notifications" hint="Shown in your notification center">
           <Toggle
             label="System notifications"
@@ -342,106 +452,31 @@ export function SettingsPage() {
         )}
       </Section>
 
-      <Section
-        title="When you pray"
-        description="If you pray later than the start (for example with your mosque), set how many minutes after. Get ready and Prayer time follow it, and it moves with the start time every day."
-      >
-        {PRAYERS.map((p) => {
-          const ps = draft.prayerSettings[p];
-          return (
-            <SettingRow key={p} label={PRAYER_LABELS[p]} hint={prayHint(p)}>
-              <MinutesInput
-                min={1}
-                max={600}
-                allowEmpty
-                placeholder="—"
-                value={ps.prayAfterMinutes}
-                onCommit={(v) => patchPrayer(p, { prayAfterMinutes: v }, 600)}
-                aria-label={`Minutes after ${PRAYER_LABELS[p]} starts that you pray`}
-              />
-              <span className="w-20 text-[13px] text-slate-400">after start</span>
-            </SettingRow>
-          );
-        })}
-      </Section>
-
-      <Section
-        title="When alarms ring"
-        description="Each alarm has one job. Turn on the ones you want; they apply to every prayer."
-      >
-        <SettingRow
-          label="Get ready"
-          hint="Rings this long before you pray"
-          disabled={!draft.getReadyEnabled}
+      {import.meta.env.DEV && (
+        <Section
+          title="Developer"
+          description="Only in development builds. Shows a pretend alarm; nothing is marked done or snoozed."
         >
-          <MinutesInput
-            min={5}
-            max={60}
-            disabled={!draft.getReadyEnabled}
-            value={draft.getReadyMinutes}
-            onCommit={(v) => v !== null && patch({ getReadyMinutes: v }, 600)}
-            aria-label="Minutes before each prayer starts"
-          />
-          <Toggle
-            label="Get ready"
-            checked={draft.getReadyEnabled}
-            onChange={(v) => patch({ getReadyEnabled: v })}
-          />
-        </SettingRow>
-        <SettingRow
-          label="Prayer time"
-          hint="Rings when you pray (at the start, unless set above)"
-          disabled={!draft.startAlarmEnabled}
-        >
-          <Toggle
-            label="Prayer time"
-            checked={draft.startAlarmEnabled}
-            onChange={(v) => patch({ startAlarmEnabled: v })}
-          />
-        </SettingRow>
-        <SettingRow
-          label="Don't miss it"
-          hint="Rings this long before a prayer's time ends, unless you marked it done"
-          disabled={!draft.preEndWarningEnabled}
-        >
-          <MinutesInput
-            min={1}
-            max={120}
-            disabled={!draft.preEndWarningEnabled}
-            value={draft.preEndWarningMinutes}
-            onCommit={(v) => v !== null && patch({ preEndWarningMinutes: v }, 600)}
-            aria-label="Minutes before the prayer time ends"
-          />
-          <Toggle
-            label="Don't miss it"
-            checked={draft.preEndWarningEnabled}
-            onChange={(v) => patch({ preEndWarningEnabled: v })}
-          />
-        </SettingRow>
-        <SettingRow label="Ring for" hint="Tap a prayer to turn its alarms off">
-          <div role="group" aria-label="Prayers with alarms" className="flex flex-wrap gap-1.5">
-            {PRAYERS.map((p) => {
-              const on = draft.prayerSettings[p].enabled;
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => patchPrayer(p, { enabled: !on })}
-                  className={cn(
-                    "h-8 rounded-full border px-3 text-[13px] transition-colors",
-                    on
-                      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
-                      : "border-slate-700 text-slate-400 line-through hover:bg-slate-800",
-                  )}
-                >
-                  {PRAYER_LABELS[p]}
-                </button>
-              );
-            })}
-          </div>
-        </SettingRow>
-      </Section>
+          <SettingRow label="Preview alarm" hint="Uses your sound, popup and notification settings">
+            {(
+              [
+                ["getReady", "Get ready"],
+                ["start", "Prayer time"],
+                ["preEnd", "Don't miss it"],
+              ] as const
+            ).map(([kind, label]) => (
+              <Button
+                key={kind}
+                size="sm"
+                variant="ghost"
+                onClick={() => void previewAlarm(kind).catch((e) => setToneError(String(e)))}
+              >
+                {label}
+              </Button>
+            ))}
+          </SettingRow>
+        </Section>
+      )}
 
       <Section title="General">
         <SettingRow label="Open at login" hint="Starts quietly in the tray when you sign in">

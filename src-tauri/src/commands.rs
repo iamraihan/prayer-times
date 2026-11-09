@@ -207,6 +207,22 @@ pub fn alarm_snooze(shared: State<'_, SharedEngine>, minutes: i64) -> AppStateDt
     })
 }
 
+/// Dev builds only (`pnpm tauri dev`): shows a pretend alarm to check the
+/// popup design. Release builds refuse it.
+#[tauri::command]
+pub fn preview_alarm(
+    shared: State<'_, SharedEngine>,
+    kind: engine::AlarmKind,
+) -> Result<AppStateDto, String> {
+    if !cfg!(debug_assertions) {
+        return Err("Alarm preview is only available in development builds".into());
+    }
+    with_engine(&shared, |engine| {
+        engine.preview_alarm(kind)?;
+        Ok(engine.snapshot())
+    })
+}
+
 #[tauri::command]
 pub fn alarm_dismiss(shared: State<'_, SharedEngine>) -> AppStateDto {
     with_engine(&shared, |engine| {

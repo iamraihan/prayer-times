@@ -4,7 +4,7 @@
  * UI event -> action -> Rust -> new AppState -> store -> re-render.
  */
 import { api, type PreviewRequest } from "./ipc";
-import type { AsrSchool, CityMatch, Location, LocationPreview, Prayer, Settings } from "./types";
+import type { AlarmKind, AsrSchool, CityMatch, Location, LocationPreview, Prayer, Settings } from "./types";
 import { useAppStore } from "../store/useAppStore";
 
 function apply(s: Awaited<ReturnType<typeof api.getState>>): void {
@@ -37,6 +37,11 @@ export async function alarmSnooze(minutes: number): Promise<void> {
 
 export async function alarmDismiss(): Promise<void> {
   apply(await api.alarmDismiss());
+}
+
+/** Dev builds only: shows a pretend alarm to check the popup design. */
+export async function previewAlarm(kind: AlarmKind): Promise<void> {
+  apply(await api.previewAlarm(kind));
 }
 
 export function searchCities(query: string, countryCode: string): Promise<CityMatch[]> {

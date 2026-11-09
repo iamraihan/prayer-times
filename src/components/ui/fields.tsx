@@ -9,7 +9,7 @@ import { cn } from "../../lib/cn";
 const fieldBase =
   "h-9 w-full rounded-lg border border-slate-700 bg-slate-950/50 px-3 text-sm text-slate-100 " +
   "transition-colors placeholder:text-slate-500 hover:border-slate-600 " +
-  "focus:border-emerald-500 focus:outline-none focus-visible:outline-none disabled:opacity-45 " +
+  "focus:border-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 disabled:opacity-45 " +
   "aria-[invalid=true]:border-red-400/70";
 
 export function Label({ children, hint }: { children: ReactNode; hint?: string | undefined }) {
