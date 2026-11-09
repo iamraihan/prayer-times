@@ -94,7 +94,11 @@ function MainLayout({ initialTab = "today" }: { initialTab?: Tab }) {
 
       <main className="flex-1 overflow-y-auto px-5 py-5">
         <div className="mx-auto max-w-2xl">
-          {tab === "today" ? <TodayPage /> : <SettingsPage />}
+          {/* Settings stays mounted so an unsaved draft survives tab switches. */}
+          {tab === "today" && <TodayPage />}
+          <div hidden={tab !== "settings"}>
+            <SettingsPage />
+          </div>
         </div>
       </main>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, Download, ExternalLink, FolderOpen, Loader2, MapPin, RotateCcw, Save, Undo2, Volume2 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -66,11 +66,37 @@ export function SettingsPage() {
     return `Alarm at ${fmtClock(d, mode)}`;
   }
 
-  // Re-seed the draft whenever the backend pushes a different settings object
-  // while the draft is unchanged (e.g. after location change).
+  // Rebase the draft whenever the backend pushes new settings (tone picked,
+  // volume saved, location changed…): fields the user hasn't edited take the
+  // new value, edited fields keep the user's pending change. Comparing the
+  // draft against the *new* settings (the old logic) left the draft stale
+  // after any instant change, e.g. a just-picked tone showed as "unsaved".
+  const prevSettings = useRef<Settings | null>(settings);
   useEffect(() => {
-    setDraft((d) => (d && settings && sameJson(d, settings) ? settings : d ?? settings));
+    const prev = prevSettings.current;
+    prevSettings.current = settings;
+    setDraft((d) => (d && prev && settings ? rebase(d, prev, settings) : d ?? settings));
   }, [settings]);
+
+  // Volume applies instantly (like the tone): debounce while dragging, then
+  // persist the *saved* settings + new volume so other pending draft edits
+  // aren't committed behind the user's back.
+  const volumeTimer = useRef<number | undefined>(undefined);
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
+  useEffect(() => () => window.clearTimeout(volumeTimer.current), []);
+
+  function changeVolume(volume: number) {
+    patch({ soundVolume: volume });
+    window.clearTimeout(volumeTimer.current);
+    volumeTimer.current = window.setTimeout(() => {
+      const base = latestSettings.current;
+      if (!base || base.soundVolume === volume) return;
+      updateSettings({ ...base, soundVolume: volume }).catch((e) =>
+        setToast({ kind: "error", message: `Couldn't save volume: ${String(e)}` }),
+      );
+    }, 300);
+  }
 
   const dirty = useMemo(
     () => Boolean(draft && settings && !sameJson(draft, settings)),
@@ -108,6 +134,9 @@ export function SettingsPage() {
 
   async function save() {
     if (!draft) return;
+    // The draft already carries the volume; a pending debounced volume save
+    // would otherwise fire with the old base and revert this save.
+    window.clearTimeout(volumeTimer.current);
     setSaveState("saving");
     try {
       await updateSettings(draft);
@@ -162,7 +191,10 @@ export function SettingsPage() {
           <Button
             variant="ghost"
             disabled={!dirty || saveState === "saving"}
-            onClick={() => setDraft(settings)}
+            onClick={() => {
+              window.clearTimeout(volumeTimer.current);
+              setDraft(settings);
+            }}
           >
             <RotateCcw className="h-4 w-4" /> Reset
           </Button>
@@ -309,14 +341,12 @@ export function SettingsPage() {
           <div className="flex items-end gap-3">
             <div className="flex-1">
               <SliderField
-                label={`Volume — ${Math.round(draft.soundVolume * 100)}%`}
+                label={`Volume — ${Math.round(draft.soundVolume * 100)}% (applies instantly)`}
                 value={Math.round(draft.soundVolume * 100)}
-                onChange={(e) =>
-                  patch({ soundVolume: Number(e.target.value) / 100 })
-                }
+                onChange={(e) => changeVolume(Number(e.target.value) / 100)}
               />
             </div>
-            <Button size="md" onClick={() => void testSound()}>
+            <Button size="md" onClick={() => void testSound(draft.soundVolume)}>
               <Volume2 className="h-4 w-4" /> Test
             </Button>
           </div>
@@ -538,6 +568,54 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, Math.round(v)));
 }
 
+// Every Settings field, checked by the compiler: adding a field to
+// `Settings` without listing it here is a type error, so rebase can't miss it.
+const SETTINGS_FIELDS: { [K in keyof Settings]-?: true } = {
+  location: true,
+  method: true,
+  school: true,
+  timeFormat: true,
+  notificationsEnabled: true,
+  soundEnabled: true,
+  soundVolume: true,
+  alarmSound: true,
+  popupEnabled: true,
+  preEndWarningEnabled: true,
+  preEndWarningMinutes: true,
+  prayerSettings: true,
+};
+const SETTINGS_KEYS = Object.keys(SETTINGS_FIELDS) as (keyof Settings)[];
+
+/** Three-way merge per top-level field: untouched draft fields follow `next`. */
+function rebase(draft: Settings, prev: Settings, next: Settings): Settings {
+  const out: Settings = { ...next };
+  for (const key of SETTINGS_KEYS) keepEdit(out, draft, prev, key);
+  // The tone is always backend-owned (applied instantly, never via Save).
+  out.alarmSound = next.alarmSound;
+  return out;
+}
+
+function keepEdit<K extends keyof Settings>(
+  out: Settings,
+  draft: Settings,
+  prev: Settings,
+  key: K,
+): void {
+  if (!sameJson(draft[key], prev[key])) out[key] = draft[key];
+}
+
+// Key-order-insensitive: `prayerSettings` comes from a Rust HashMap whose
+// iteration order can change after each save, which must not count as an edit.
 function sameJson(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return stableJson(a) === stableJson(b);
+}
+
+function stableJson(v: unknown): string {
+  return JSON.stringify(v, (_k, val: unknown) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(
+          Object.entries(val as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : val,
+  );
 }

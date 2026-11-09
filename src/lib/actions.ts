@@ -43,8 +43,8 @@ export function previewLocation(req: PreviewRequest): Promise<LocationPreview> {
   return api.previewLocation(req);
 }
 
-export function testSound(): Promise<void> {
-  return api.testSound();
+export function testSound(volume?: number): Promise<void> {
+  return api.testSound(volume);
 }
 
 /** Picks a custom alarm tone; the file is validated + persisted by Rust. */

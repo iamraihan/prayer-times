@@ -94,12 +94,13 @@ pub fn update_settings(
     shared: State<'_, SharedEngine>,
     settings: Settings,
 ) -> Result<AppStateDto, String> {
-    let dto = with_engine(&shared, |engine| {
-        engine.apply_settings(settings);
+    let (saved, dto) = with_engine(&shared, |engine| {
+        let saved = engine.apply_settings(settings);
         engine.tick();
-        engine.snapshot()
+        (saved, engine.snapshot())
     });
     engine::wake_up(&shared);
+    saved.map_err(|e| format!("couldn't write settings file: {e}"))?;
     Ok(dto)
 }
 
@@ -144,8 +145,8 @@ pub fn alarm_dismiss(shared: State<'_, SharedEngine>) -> AppStateDto {
 }
 
 #[tauri::command]
-pub fn test_sound(shared: State<'_, SharedEngine>) {
-    with_engine(&shared, |engine| engine.test_sound());
+pub fn test_sound(shared: State<'_, SharedEngine>, volume: Option<f32>) {
+    with_engine(&shared, |engine| engine.test_sound(volume));
 }
 
 /// Makes a user-picked audio file the alarm tone: validates it, copies it
@@ -174,20 +175,19 @@ pub fn set_alarm_tone(shared: State<'_, SharedEngine>, path: String) -> Result<A
         );
     }
 
-    let dto = with_engine(&shared, |engine| {
-        engine.set_alarm_tone(source, &extension);
+    with_engine(&shared, |engine| {
+        let result = engine.set_alarm_tone(source, &extension);
         engine.tick();
-        engine.snapshot()
-    });
-    Ok(dto)
+        result.map(|()| engine.snapshot())
+    })
 }
 
 #[tauri::command]
-pub fn reset_alarm_tone(shared: State<'_, SharedEngine>) -> AppStateDto {
+pub fn reset_alarm_tone(shared: State<'_, SharedEngine>) -> Result<AppStateDto, String> {
     with_engine(&shared, |engine| {
-        engine.reset_alarm_tone();
+        let result = engine.reset_alarm_tone();
         engine.tick();
-        engine.snapshot()
+        result.map(|()| engine.snapshot())
     })
 }
 
