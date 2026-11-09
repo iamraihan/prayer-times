@@ -39,7 +39,9 @@ export const api = {
 
   alarmDismiss: (): Promise<AppState> => invoke("alarm_dismiss"),
 
-  testSound: (): Promise<void> => invoke("test_sound"),
+  /** `volume` (0–1) previews an unsaved slider value; omit to use the saved one. */
+  testSound: (volume?: number): Promise<void> =>
+    invoke("test_sound", { volume: volume ?? null }),
 
   setAlarmTone: (path: string): Promise<AppState> =>
     invoke("set_alarm_tone", { path }),

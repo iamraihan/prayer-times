@@ -173,7 +173,7 @@ impl Engine {
 
     // -- public API used by commands --------------------------------------
 
-    pub fn apply_settings(&mut self, mut settings: Settings) {
+    pub fn apply_settings(&mut self, mut settings: Settings) -> Result<(), String> {
         settings = settings.normalized();
         // The alarm tone is owned by set_alarm_tone/reset_alarm_tone (they
         // apply instantly); ignore whatever value a settings draft carries,
@@ -186,16 +186,19 @@ impl Engine {
         if calc_changed || loc_changed {
             self.reset_schedule();
         }
-        let _ = settings_io::save(&self.app, &self.settings);
         self.dirty = true;
+        settings_io::save(&self.app, &self.settings)
     }
 
     /// Copies a user-chosen audio file into the app config dir and makes it
     /// the alarm tone. Validation (extension/size/decodable) happens in the
     /// command layer.
-    pub fn set_alarm_tone(&mut self, source: PathBuf, extension: &str) {
+    pub fn set_alarm_tone(&mut self, source: PathBuf, extension: &str) -> Result<(), String> {
         let dest = self.cache_dir.join(format!("alarm-tone.{extension}"));
-        // Drop any previous custom tone file first.
+        // Copy first so a failed copy leaves the current tone intact.
+        std::fs::copy(&source, &dest)
+            .map_err(|e| format!("couldn't copy the tone file: {e}"))?;
+        // Then drop any previous custom tone with a different extension.
         if let Ok(entries) = std::fs::read_dir(&self.cache_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
@@ -205,21 +208,21 @@ impl Engine {
                 }
             }
         }
-        if std::fs::copy(&source, &dest).is_ok() {
-            self.settings.alarm_sound = Some(format!("alarm-tone.{extension}"));
-            self.sound.load(Some(dest));
-            let _ = settings_io::save(&self.app, &self.settings);
-        }
+        self.settings.alarm_sound = Some(format!("alarm-tone.{extension}"));
+        self.sound.load(Some(dest));
         self.dirty = true;
+        settings_io::save(&self.app, &self.settings)
+            .map_err(|e| format!("couldn't save settings: {e}"))
     }
 
-    pub fn reset_alarm_tone(&mut self) {
+    pub fn reset_alarm_tone(&mut self) -> Result<(), String> {
         if let Some(name) = self.settings.alarm_sound.take() {
             let _ = std::fs::remove_file(self.cache_dir.join(name));
         }
         self.sound.load(None);
-        let _ = settings_io::save(&self.app, &self.settings);
         self.dirty = true;
+        settings_io::save(&self.app, &self.settings)
+            .map_err(|e| format!("couldn't save settings: {e}"))
     }
 
     pub fn save_location(&mut self, location: Location, method: u8, school: u8) {
@@ -266,8 +269,10 @@ impl Engine {
         self.dirty = true;
     }
 
-    pub fn test_sound(&mut self) {
-        let volume = self.settings.sound_volume;
+    /// Plays the current tone briefly. `volume` previews the slider's
+    /// position; `None` uses the saved volume.
+    pub fn test_sound(&mut self, volume: Option<f32>) {
+        let volume = volume.unwrap_or(self.settings.sound_volume);
         self.sound.play_loop(volume);
         let app = self.app.clone();
         std::thread::spawn(move || {
