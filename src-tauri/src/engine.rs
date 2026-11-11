@@ -26,12 +26,14 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::aladhan::{self, DayTimings};
 use crate::models::{
     ActiveAlarmDto, AlarmMessageDto, AppStateDto, AsrSchool, DayTimingsDto, Location, NextPrayerDto,
-    Prayer, PrayerTimeDto, Settings, HistoryMonthDto, HistorySource, HistoryStatus,
+    Prayer, PrayerTimeDto, Settings, HistoryMonthDto, HistorySource, HistoryStatus, TourStep,
+    TourStepStatus,
 };
 use crate::backup::BackupFile;
 use crate::history::{self, HistoryStore};
 use crate::schedule::{self, Due, EventKind};
 use crate::sound::Sound;
+use crate::tour::{self, TourStore};
 use crate::{alarm, runtime, settings as settings_io, timeutil, tray};
 
 pub const TICK_SECONDS: u64 = 15;
@@ -134,6 +136,8 @@ pub struct Engine {
     history_error: Option<String>,
     /// Prayers already written as missed, so a tick doesn't rewrite them.
     history_logged: HashSet<(NaiveDate, Prayer)>,
+    /// `None` when `app.db` couldn't be opened; no Tours are shown then.
+    tour: Option<TourStore>,
 
     tray_l1: String,
     tray_l2: String,
@@ -182,6 +186,13 @@ impl Engine {
                 (None, Some(e))
             }
         };
+        let tour = match TourStore::open(&cache_dir.join("app.db")) {
+            Ok(store) => Some(store),
+            Err(e) => {
+                eprintln!("tour progress unavailable: {e}");
+                None
+            }
+        };
 
         Ok(Engine {
             app,
@@ -201,6 +212,7 @@ impl Engine {
             history,
             history_error,
             history_logged: HashSet::new(),
+            tour,
             tray_l1: String::new(),
             tray_l2: String::new(),
             tray_tooltip: String::new(),
@@ -211,6 +223,18 @@ impl Engine {
     }
 
     // -- public API used by commands --------------------------------------
+
+    pub fn mark_tour_steps(&self, steps: &[TourStep], status: TourStepStatus) -> Result<(), String> {
+        self.tour_store()?.mark(steps, status, Utc::now())
+    }
+
+    pub fn reset_tours(&self) -> Result<(), String> {
+        self.tour_store()?.reset()
+    }
+
+    fn tour_store(&self) -> Result<&TourStore, String> {
+        self.tour.as_ref().ok_or_else(|| "Tour progress is unavailable".to_string())
+    }
 
     pub fn apply_settings(&mut self, mut settings: Settings) -> Result<(), String> {
         // The alarm tone is owned by set_alarm_tone/reset_alarm_tone (they
@@ -583,6 +607,7 @@ impl Engine {
                 message: a.message.clone(),
             }),
             api_error: self.last_error.clone(),
+            seen_tour_steps: tour::seen_tour_steps(self.tour.as_ref()),
             location_warning,
         }
     }

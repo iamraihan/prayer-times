@@ -365,6 +365,78 @@ impl HistorySource {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tours
+// ---------------------------------------------------------------------------
+
+/// One tip in a Tour. The id is fixed forever: renaming a variant's text is
+/// fine, changing its id makes every user see that tip again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub enum TourStep {
+    TodayNextPrayer,
+    TodayPrayerList,
+    TodayTray,
+    HistoryCalendar,
+    HistoryEditDay,
+    HistoryBackup,
+    SettingsAlarms,
+    SettingsSound,
+    SettingsBackup,
+}
+
+impl TourStep {
+    pub const ALL: [TourStep; 9] = [
+        TourStep::TodayNextPrayer,
+        TourStep::TodayPrayerList,
+        TourStep::TodayTray,
+        TourStep::HistoryCalendar,
+        TourStep::HistoryEditDay,
+        TourStep::HistoryBackup,
+        TourStep::SettingsAlarms,
+        TourStep::SettingsSound,
+        TourStep::SettingsBackup,
+    ];
+
+    /// The stored id; same as the camelCase wire name.
+    pub fn id(self) -> &'static str {
+        match self {
+            TourStep::TodayNextPrayer => "todayNextPrayer",
+            TourStep::TodayPrayerList => "todayPrayerList",
+            TourStep::TodayTray => "todayTray",
+            TourStep::HistoryCalendar => "historyCalendar",
+            TourStep::HistoryEditDay => "historyEditDay",
+            TourStep::HistoryBackup => "historyBackup",
+            TourStep::SettingsAlarms => "settingsAlarms",
+            TourStep::SettingsSound => "settingsSound",
+            TourStep::SettingsBackup => "settingsBackup",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<TourStep> {
+        TourStep::ALL.into_iter().find(|s| s.id() == id)
+    }
+}
+
+/// How a Tour Step was seen. Both count as seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub enum TourStepStatus {
+    Viewed,
+    Skipped,
+}
+
+impl TourStepStatus {
+    pub fn id(self) -> &'static str {
+        match self {
+            TourStepStatus::Viewed => "viewed",
+            TourStepStatus::Skipped => "skipped",
+        }
+    }
+}
+
 /// One prayer's recorded status per field; `None` = no record.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -568,6 +640,9 @@ pub struct AppStateDto {
     /// API matched to a place in another country); the UI asks the user to
     /// pick their city again.
     pub location_warning: Option<String>,
+    /// Tour Steps the user has seen; `None` when `app.db` can't be read,
+    /// in which case the UI shows no Tours.
+    pub seen_tour_steps: Option<Vec<TourStep>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

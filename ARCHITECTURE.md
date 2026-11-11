@@ -108,6 +108,12 @@ Rules of thumb:
   only when its window closed while the app was running (within the 10-min
   grace), so days the app didn't see read as "no record". Design:
   `docs/superpowers/specs/2026-11-09-prayer-history-design.md`.
+- **Tours** (done): `tour.rs` keeps `app.db` (SQLite, separate from
+  `history.db` and not in backups) with the Tour Steps the user has seen;
+  the snapshot's `seenTourSteps` is `null` when it can't be read, and the UI
+  then shows no Tours. Step text and targets live in `src/lib/tour.ts`, and
+  `src/lib/useTour.ts` runs them with driver.js. Adding a step: a `TourStep`
+  variant, its entry in `STEPS`, a `data-tour` attribute.
 - **Autostart on login**: add `tauri-plugin-autostart`, init in `lib.rs`,
   toggle in Settings.
 - **Unit tests**: run `cargo test` in `src-tauri/` (CI runs it on all three

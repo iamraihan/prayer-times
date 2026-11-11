@@ -4,6 +4,7 @@ import type { DayTimingsDto } from "./DayTimingsDto";
 import type { NextPrayerDto } from "./NextPrayerDto";
 import type { Prayer } from "./Prayer";
 import type { Settings } from "./Settings";
+import type { TourStep } from "./TourStep";
 
 export type AppStateDto = { hasLocation: boolean, settings: Settings, today: DayTimingsDto | null, next: NextPrayerDto | null, doneToday: { [key in Prayer]?: boolean }, 
 /**
@@ -15,4 +16,9 @@ snoozes: { [key in Prayer]?: string }, activeAlarm: ActiveAlarmDto | null, apiEr
  * API matched to a place in another country); the UI asks the user to
  * pick their city again.
  */
-locationWarning: string | null, };
+locationWarning: string | null, 
+/**
+ * Tour Steps the user has seen; `None` when `app.db` can't be read,
+ * in which case the UI shows no Tours.
+ */
+seenTourSteps: Array<TourStep> | null, };

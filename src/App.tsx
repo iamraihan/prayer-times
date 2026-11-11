@@ -9,7 +9,7 @@ import { UpdateBanner } from "./components/UpdateBanner";
 import { startClock, useAppStore } from "./store/useAppStore";
 import { useUpdateStore } from "./store/useUpdateStore";
 import { cn } from "./lib/cn";
-import { Button } from "./components/ui/Button";
+import { useTour } from "./lib/useTour";
 
 type Tab = "today" | "history" | "settings";
 
@@ -18,9 +18,6 @@ export default function App() {
   const initError = useAppStore((s) => s.initError);
   const retry = useAppStore((s) => s.retry);
   const hasLocation = useAppStore((s) => s.state?.hasLocation ?? false);
-  // First run: after the wizard completes, land on Today with a one-time
-  // card saying what will ring and where to change it.
-  const [justSetup, setJustSetup] = useState(false);
 
   useEffect(() => {
     startClock();
@@ -49,10 +46,11 @@ export default function App() {
   }
 
   if (!hasLocation) {
-    return <SetupWizard onFinished={() => setJustSetup(true)} />;
+    // After setup the Today Tour explains what will ring (see useTour).
+    return <SetupWizard />;
   }
 
-  return <MainLayout welcome={justSetup} />;
+  return <MainLayout />;
 }
 
 function Splash() {
@@ -66,9 +64,9 @@ function Splash() {
   );
 }
 
-function MainLayout({ welcome = false }: { welcome?: boolean }) {
+function MainLayout() {
   const [tab, setTab] = useState<Tab>("today");
-  const [showWelcome, setShowWelcome] = useState(welcome);
+  useTour(tab);
   const location = useAppStore((s) => s.state?.settings.location ?? null);
 
   return (
@@ -103,15 +101,6 @@ function MainLayout({ welcome = false }: { welcome?: boolean }) {
       <main className="flex-1 overflow-y-auto px-5 pt-7 pb-5">
         <div className="mx-auto max-w-2xl">
           {/* Settings stays mounted so an unsaved draft survives tab switches. */}
-          {tab === "today" && showWelcome && (
-            <WelcomeCard
-              onReview={() => {
-                setShowWelcome(false);
-                setTab("settings");
-              }}
-              onDismiss={() => setShowWelcome(false)}
-            />
-          )}
           {tab === "today" && <TodayPage />}
           {tab === "history" && <HistoryPage />}
           <div hidden={tab !== "settings"}>
@@ -120,42 +109,6 @@ function MainLayout({ welcome = false }: { welcome?: boolean }) {
         </div>
       </main>
     </div>
-  );
-}
-
-/** Shown once, right after setup: what will ring, in the user's own settings,
- * and where to change it. */
-function WelcomeCard({ onReview, onDismiss }: { onReview: () => void; onDismiss: () => void }) {
-  const settings = useAppStore((s) => s.state?.settings ?? null);
-  if (!settings) return null;
-  const parts: string[] = [];
-  if (settings.getReadyEnabled) parts.push(`${settings.getReadyMinutes} minutes before each prayer`);
-  if (settings.startAlarmEnabled) parts.push("when each prayer starts");
-  if (settings.preEndWarningEnabled) {
-    parts.push(`${settings.preEndWarningMinutes} minutes before its time ends, if you haven't marked it done`);
-  }
-  const when =
-    parts.length === 0
-      ? "All alarms are off right now."
-      : `Alarms will ring ${parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1] ?? ""}` : (parts[0] ?? "")}.`;
-  return (
-    <section
-      aria-label="You're set up"
-      className="fade-in mb-6 rounded-xl border border-emerald-400/25 bg-emerald-400/[0.04] p-5"
-    >
-      <h2 className="font-semibold text-slate-50">You're set up for {settings.location?.city ?? "your city"}</h2>
-      <p className="mt-1 text-sm leading-relaxed text-slate-300">
-        {when} The app keeps running in the tray when you close this window.
-      </p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button size="sm" variant="primary" onClick={onDismiss}>
-          Got it
-        </Button>
-        <Button size="sm" variant="ghost" onClick={onReview}>
-          Change alarms
-        </Button>
-      </div>
-    </section>
   );
 }
 

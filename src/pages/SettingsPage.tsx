@@ -26,6 +26,7 @@ import {
   getAutostart,
   previewAlarm,
   resetAlarmTone,
+  resetTours,
   setAlarmTone,
   setAutostart as setAutostartCmd,
   testSound,
@@ -36,6 +37,7 @@ import { PRAYERS, PRAYER_LABELS, type Prayer, type Settings } from "../lib/types
 import { cn } from "../lib/cn";
 import { fmtHourMinute, parseHM } from "../lib/time";
 import { friendlyError } from "../lib/errors";
+import { forgetShownTours } from "../lib/useTour";
 
 /**
  * Settings are edited as a local draft and pushed to the backend on Save.
@@ -58,6 +60,17 @@ export function SettingsPage() {
   }, []);
 
   const [autostartError, setAutostartError] = useState<string | null>(null);
+  const [tourError, setTourError] = useState<string | null>(null);
+
+  async function replayTours() {
+    setTourError(null);
+    forgetShownTours();
+    try {
+      await resetTours();
+    } catch (e) {
+      setTourError(`Couldn't reset the tours. ${friendlyError(e)}`);
+    }
+  }
 
   // Applies instantly via the OS launcher entry; reverts on failure.
   async function toggleAutostart(enabled: boolean) {
@@ -320,6 +333,7 @@ export function SettingsPage() {
 
       <Section
         title="When alarms ring"
+        tour="settings-alarms"
         description="Turn on the alarms you want. They apply to every prayer."
       >
         <SettingRow
@@ -396,7 +410,7 @@ export function SettingsPage() {
         </SettingRow>
       </Section>
 
-      <Section title="How alarms ring" description="Applies to every alarm.">
+      <Section title="How alarms ring" description="Applies to every alarm." tour="settings-sound">
         <SettingRow label="System notifications" hint="Shown in your notification center">
           <Toggle
             label="System notifications"
@@ -495,7 +509,19 @@ export function SettingsPage() {
             {autostartError}
           </p>
         )}
-        <BackupControls />
+        <div data-tour="settings-backup" className="divide-y divide-slate-800/80">
+          <BackupControls />
+        </div>
+        <SettingRow label="Replay tours" hint="Show the tips for each tab again">
+          <Button size="sm" onClick={() => void replayTours()}>
+            Replay
+          </Button>
+        </SettingRow>
+        {tourError && (
+          <p role="alert" className="px-4 py-3 text-[13px] text-red-300">
+            {tourError}
+          </p>
+        )}
       </Section>
 
       <Section

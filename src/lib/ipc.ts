@@ -21,6 +21,8 @@ import type {
   Prayer,
   PreviewRequest,
   Settings,
+  TourStep,
+  TourStepStatus,
 } from "./types";
 
 export type { PreviewRequest } from "./types";
@@ -39,6 +41,8 @@ interface Commands {
   export_backup: [{ path: string }, void];
   preview_backup: [{ path: string }, BackupPreview];
   import_backup: [{ path: string; includeSettings: boolean }, AppState];
+  mark_tour_steps: [{ steps: TourStep[]; status: TourStepStatus }, AppState];
+  reset_tours: [NoArgs, AppState];
   alarm_done: [NoArgs, AppState];
   alarm_snooze: [{ minutes: number }, AppState];
   alarm_dismiss: [NoArgs, AppState];
@@ -89,6 +93,11 @@ export const api = {
 
   importBackup: (path: string, includeSettings: boolean) =>
     call("import_backup", { path, includeSettings }),
+
+  markTourSteps: (steps: TourStep[], status: TourStepStatus) =>
+    call("mark_tour_steps", { steps, status }),
+
+  resetTours: () => call("reset_tours", none),
 
   previewAlarm: (kind: AlarmKind) => call("preview_alarm", { kind }),
 

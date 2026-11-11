@@ -87,3 +87,13 @@ _Avoid_: Completed, prayed, checked
 
 **Missed Event**:
 An Event whose moment passed more than 10 minutes ago without ringing (the app was closed or the machine was asleep). It is skipped silently.
+
+### Tours
+
+**Tour**:
+A short sequence of tips for one tab (Today, History, Settings), shown the first time the user opens that tab after setup or after an update that adds tips.
+_Avoid_: Onboarding, walkthrough (in code)
+
+**Tour Step**:
+One tip in a Tour, pointing at one control (or a centered card). Each has a fixed id; whether the user has seen it is recorded per Tour Step, as viewed or skipped (both count as seen), in `app.db`.
+_Avoid_: Slide, hint; "done"/"completed" for its status (those mean prayers)

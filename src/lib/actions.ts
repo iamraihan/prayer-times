@@ -4,7 +4,17 @@
  * UI event -> action -> Rust -> new AppState -> store -> re-render.
  */
 import { api, type PreviewRequest } from "./ipc";
-import type { AlarmKind, AsrSchool, CityMatch, Location, LocationPreview, Prayer, Settings } from "./types";
+import type {
+  AlarmKind,
+  AsrSchool,
+  CityMatch,
+  Location,
+  LocationPreview,
+  Prayer,
+  Settings,
+  TourStep,
+  TourStepStatus,
+} from "./types";
 import { useAppStore } from "../store/useAppStore";
 
 function apply(s: Awaited<ReturnType<typeof api.getState>>): void {
@@ -25,6 +35,15 @@ export async function updateSettings(settings: Settings): Promise<void> {
 
 export async function setPrayerDone(prayer: Prayer, done: boolean): Promise<void> {
   apply(await api.setPrayerDone(prayer, done));
+}
+
+/** Records Tour Steps as seen; they won't show again until "Replay tours". */
+export async function markTourSteps(steps: TourStep[], status: TourStepStatus): Promise<void> {
+  apply(await api.markTourSteps(steps, status));
+}
+
+export async function resetTours(): Promise<void> {
+  apply(await api.resetTours());
 }
 
 export async function alarmDone(): Promise<void> {

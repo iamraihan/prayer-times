@@ -11,7 +11,7 @@ use crate::aladhan::{self, FetchParams, Place};
 use crate::engine::{self, Engine};
 use crate::models::{
     AppStateDto, BackupPreviewDto, HistoryMonthDto, HistoryStatus, AsrSchool, CityMatchDto, Coordinates, Location, LocationPreviewDto, Prayer,
-    PreviewRequest, Settings,
+    PreviewRequest, Settings, TourStep, TourStepStatus,
 };
 use crate::{geocode, timeutil, tzcountry};
 use crate::SharedEngine;
@@ -187,6 +187,28 @@ pub fn set_prayer_done(
     with_engine(&shared, |engine| {
         engine.set_prayer_done(prayer, done)?;
         engine.tick();
+        Ok(engine.snapshot())
+    })
+}
+
+/// Records Tour Steps as seen (a Tour finished or closed early).
+#[tauri::command]
+pub fn mark_tour_steps(
+    shared: State<'_, SharedEngine>,
+    steps: Vec<TourStep>,
+    status: TourStepStatus,
+) -> Result<AppStateDto, String> {
+    with_engine(&shared, |engine| {
+        engine.mark_tour_steps(&steps, status)?;
+        Ok(engine.snapshot())
+    })
+}
+
+/// Forgets every seen Tour Step ("Replay tours").
+#[tauri::command]
+pub fn reset_tours(shared: State<'_, SharedEngine>) -> Result<AppStateDto, String> {
+    with_engine(&shared, |engine| {
+        engine.reset_tours()?;
         Ok(engine.snapshot())
     })
 }
