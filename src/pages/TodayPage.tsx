@@ -46,7 +46,9 @@ export function TodayPage() {
       )}
 
       <AlarmBanner />
-      <NextPrayerCard />
+      <div data-tour="next-prayer">
+        <NextPrayerCard />
+      </div>
 
       {snoozes.length > 0 && location && (
         <ul className="space-y-1 px-1">
@@ -60,7 +62,9 @@ export function TodayPage() {
         </ul>
       )}
 
-      <PrayerList />
+      <div data-tour="prayer-list">
+        <PrayerList />
+      </div>
 
       {location && state && (
         <p className="px-1 pb-2 text-center text-[12px] text-slate-500">

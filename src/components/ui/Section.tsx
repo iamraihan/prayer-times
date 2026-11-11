@@ -9,14 +9,17 @@ export function Section({
   description,
   children,
   className,
+  tour,
 }: {
   title: string;
   description?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** `data-tour` id when a Tour Step points at this section. */
+  tour?: string | undefined;
 }) {
   return (
-    <section className={cn("space-y-2.5", className)}>
+    <section className={cn("space-y-2.5", className)} data-tour={tour}>
       <header className="px-1">
         <h2 className="text-[13px] font-semibold text-slate-200">{title}</h2>
         {description && (

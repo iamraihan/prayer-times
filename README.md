@@ -224,7 +224,8 @@ Notes:
 
 - **Data lives in** the OS config dir (e.g.
   `%APPDATA%\com.prayertimes.app` / `~/.config/com.prayertimes.app`):
-  `settings.json`, `runtime.json` (fired alarms / done marks for today) and
+  `settings.json`, `runtime.json` (fired alarms / done marks for today),
+  `history.db` (prayer history), `app.db` (which Tour tips you've seen) and
   `cache/` (one timetable file per month + method).
 - **Windows dev notifications**: `pnpm tauri dev` may show plain toast
   notifications; installed builds use the proper app identity.

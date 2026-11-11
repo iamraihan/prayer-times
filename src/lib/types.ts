@@ -30,6 +30,8 @@ export type { HistoryMonthDto as HistoryMonth } from "./bindings/HistoryMonthDto
 export type { PrayerTotalDto as PrayerTotal } from "./bindings/PrayerTotalDto";
 export type { PrayerTotalsDto as PrayerTotals } from "./bindings/PrayerTotalsDto";
 export type { BackupPreviewDto as BackupPreview } from "./bindings/BackupPreviewDto";
+export type { TourStep } from "./bindings/TourStep";
+export type { TourStepStatus } from "./bindings/TourStepStatus";
 
 export const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const satisfies readonly Prayer[];
 

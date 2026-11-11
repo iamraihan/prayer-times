@@ -137,7 +137,7 @@ export function HistoryPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div data-tour="history-header" className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1">
           <IconButton label="Previous month" onClick={() => shiftMonth(-1)}>
             <ChevronLeft className="h-4 w-4" aria-hidden />
@@ -169,7 +169,7 @@ export function HistoryPage() {
             <div key={w}>{w}</div>
           ))}
         </div>
-        <div className="grid grid-cols-7 gap-1.5">
+        <div data-tour="history-days" className="grid grid-cols-7 gap-1.5">
           {Array.from({ length: lead }, (_, i) => (
             <div key={`lead-${i}`} aria-hidden />
           ))}
@@ -216,7 +216,7 @@ export function HistoryPage() {
         </div>
       </Section>
 
-      <Section title="Backup">
+      <Section title="Backup" tour="history-backup">
         <BackupControls historyOnly onImported={() => void load()} />
       </Section>
     </div>

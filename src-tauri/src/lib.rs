@@ -11,6 +11,7 @@
 //!                 Ubuntu app indicator)
 //! - `settings`  — settings.json persistence
 //! - `runtime`   — per-day runtime state persistence (fired/snooze/done)
+//! - `tour`      — Tour Step progress (app.db)
 //! - `commands`  — IPC commands
 
 mod alarm;
@@ -29,6 +30,7 @@ mod timeutil;
 mod tray;
 mod tzcountry;
 mod windows;
+mod tour;
 
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -104,6 +106,8 @@ pub fn run() {
             commands::set_prayer_done,
             commands::get_history_month,
             commands::set_history_entry,
+            commands::mark_tour_steps,
+            commands::reset_tours,
             commands::export_backup,
             commands::preview_backup,
             commands::import_backup,

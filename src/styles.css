@@ -187,3 +187,99 @@
     animation: none;
   }
 }
+
+/* Tours (driver.js). Loaded after driver.js/dist/driver.css, whose rules
+   start with `all: unset`; everything here re-applies the app's own tokens
+   (the tinted slate scale above, and the <Button> sm styles) so the popover
+   reads as part of the app. */
+.driver-popover.pt-tour {
+  @apply font-sans rounded-xl border border-slate-800 bg-slate-900 p-4 text-slate-300;
+  min-width: 280px;
+  max-width: 340px;
+  box-shadow:
+    0 12px 32px -8px rgb(0 0 0 / 0.6),
+    0 2px 6px rgb(0 0 0 / 0.3);
+}
+.pt-tour .driver-popover-title {
+  @apply pr-7 text-[14px] leading-snug font-semibold text-slate-50;
+}
+.pt-tour .driver-popover-description {
+  @apply mt-1.5 text-[13px] leading-relaxed text-slate-300;
+}
+.pt-tour .driver-popover-footer {
+  @apply mt-4 gap-3;
+}
+.pt-tour .driver-popover-progress-text {
+  @apply text-[12px] text-slate-500;
+  font-variant-numeric: tabular-nums;
+}
+.pt-tour .driver-popover-navigation-btns {
+  @apply gap-2;
+}
+.pt-tour .driver-popover-navigation-btns button + button {
+  margin-left: 0;
+}
+/* Same as <Button size="sm">: 32px tall, text centered on both axes.
+   driver.js sets an inline `display: block` on its buttons, so centering
+   uses line-height (32px minus the 1px borders), not flex. */
+.pt-tour .driver-popover-footer-btn {
+  @apply h-8 cursor-pointer rounded-lg px-3 py-0 text-center text-[13px] leading-[30px] font-medium whitespace-nowrap select-none;
+  text-shadow: none;
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    color 150ms,
+    transform 150ms;
+}
+.pt-tour .driver-popover-footer-btn:active {
+  transform: scale(0.98);
+}
+/* Back = secondary */
+.pt-tour .driver-popover-prev-btn {
+  @apply border border-slate-700 bg-slate-800/80 text-slate-100 hover:border-slate-600 hover:bg-slate-800;
+}
+/* Next / Done = primary */
+.pt-tour .driver-popover-next-btn {
+  @apply border border-transparent bg-emerald-700 text-white hover:bg-emerald-800 active:bg-emerald-900;
+}
+/* No Back on the first step, rather than a dead button. `!important`
+   only because driver.js writes `display` inline. */
+.pt-tour .driver-popover-prev-btn.driver-popover-btn-disabled {
+  display: none !important;
+}
+.pt-tour .driver-popover-footer-btn:focus-visible,
+.pt-tour .driver-popover-close-btn:focus-visible {
+  outline: 2px solid var(--color-emerald-400);
+  outline-offset: 2px;
+}
+/* Close: a drawn X (lucide), not the × glyph driver.js ships. */
+.pt-tour .driver-popover-close-btn {
+  @apply top-2.5 right-2.5 h-7 w-7 rounded-md text-slate-500 hover:bg-slate-800/70 hover:text-slate-100;
+  font-size: 0;
+  transition:
+    background-color 150ms,
+    color 150ms;
+}
+.pt-tour .driver-popover-close-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18'/%3E%3Cpath d='m6 6 12 12'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.pt-tour .driver-popover-arrow-side-top {
+  border-top-color: var(--color-slate-900);
+}
+.pt-tour .driver-popover-arrow-side-bottom {
+  border-bottom-color: var(--color-slate-900);
+}
+.pt-tour .driver-popover-arrow-side-left {
+  border-left-color: var(--color-slate-900);
+}
+.pt-tour .driver-popover-arrow-side-right {
+  border-right-color: var(--color-slate-900);
+}
