@@ -1,0 +1,85 @@
+# Publishes the README "Downloads" badge value: the sum of download_count
+# over every release asset that is an installer. Excluded:
+#   - latest.json: the in-app update check fetches it on every launch.
+#   - *.sig: the signatures are inlined in latest.json, so the updater
+#     never fetches these files.
+#   - *.app.tar.gz: the macOS updater payload; on macOS the app opens the
+#     release page instead of self-updating, so it isn't an install.
+# Updates that download a Windows/Linux installer are still counted:
+# GitHub can't tell them apart from new installs.
+#
+# The result is written as a shields.io endpoint JSON to the `badges`
+# branch (a single force-pushed commit, so it never grows). The README
+# badge reads it via https://img.shields.io/endpoint?url=...
+#
+# Operations:
+#   - The badge shows an error until this workflow has run once. After the
+#     first merge to main, run it by hand from the Actions tab.
+#   - GitHub disables scheduled workflows after 60 days without repository
+#     activity. If the badge stops moving, re-enable this workflow from
+#     the Actions tab.
+name: Download count
+
+on:
+  schedule:
+    - cron: "17 */6 * * *" # every 6 hours
+  workflow_run:
+    # A release made with GITHUB_TOKEN does not fire `release` events,
+    # so refresh after the Release workflow finishes instead.
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-count
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Count installer downloads
+        id: count
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count=$(gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '.[] | select(.draft | not) | .assets[]
+                  | select(.name != "latest.json"
+                           and (.name | endswith(".sig") | not)
+                           and (.name | endswith(".app.tar.gz") | not))
+                  | .download_count' \
+            | jq -s 'add // 0')
+          echo "Installer downloads: $count"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Publish badge JSON to the badges branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COUNT: ${{ steps.count.outputs.count }}
+        run: |
+          json=$(jq -cn --arg n "$COUNT" \
+            '{schemaVersion: 1, label: "downloads", message: $n, color: "brightgreen"}')
+
+          # Empty when the badges branch or file doesn't exist yet (first run).
+          current=""
+          if encoded=$(gh api "repos/${{ github.repository }}/contents/downloads.json?ref=badges" \
+              --jq '.content' 2>/dev/null); then
+            current=$(printf '%s' "$encoded" | base64 -d)
+          fi
+          if [ "$current" = "$json" ]; then
+            echo "Unchanged ($COUNT); nothing to push."
+            exit 0
+          fi
+
+          mkdir out && cd out
+          git init -q -b badges
+          printf '%s' "$json" > downloads.json
+          git add downloads.json
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "chore: update download count to $COUNT"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" badges
