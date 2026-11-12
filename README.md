@@ -3,6 +3,7 @@
 [![CI](https://github.com/iamraihan/prayer-times/actions/workflows/ci.yml/badge.svg)](https://github.com/iamraihan/prayer-times/actions/workflows/ci.yml)
 [![Release](https://github.com/iamraihan/prayer-times/actions/workflows/release.yml/badge.svg)](https://github.com/iamraihan/prayer-times/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fiamraihan%2Fprayer-times%2Fbadges%2Fdownloads.json)](https://github.com/iamraihan/prayer-times/releases)
 
 A cross-platform (Windows, macOS, Ubuntu/Linux) prayer-times app built with
 Tauri 2, using the [Aladhan API](https://aladhan.com/prayer-times-api) for
