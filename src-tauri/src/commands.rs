@@ -386,6 +386,14 @@ pub fn get_autostart(app: AppHandle) -> bool {
 pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
     let autolaunch = app.autolaunch();
+    // A debug build loads its windows from the Vite dev server (`devUrl`).
+    // Registered at login it starts before Vite, so the alarm popup shows
+    // "Could not connect to localhost". It would also replace the installed
+    // app's entry, which uses the same file. Disabling stays allowed so a dev
+    // build can clean up an entry it wrote earlier.
+    if enabled && cfg!(debug_assertions) {
+        return Err("Launch at login is disabled in development builds.".into());
+    }
     if enabled {
         autolaunch.enable().map_err(|e| e.to_string())?;
     } else {
