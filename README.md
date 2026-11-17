@@ -26,6 +26,12 @@ feature overview and downloads for Windows, macOS & Linux.
 - **In-app auto-updates** — the app checks for updates on launch and from
   Settings; see below.
 
+## Video tutorial
+
+New to the app? This full guide covers setup, alarms and reminders.
+
+[![Watch the Prayer Times tutorial on YouTube](https://img.youtube.com/vi/35BldPFeyjc/maxresdefault.jpg)](https://youtu.be/35BldPFeyjc)
+
 ## Install
 
 Grab the latest installer for your OS from the
