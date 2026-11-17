@@ -120,6 +120,7 @@ pub fn run() {
             commands::reset_alarm_tone,
             commands::get_autostart,
             commands::set_autostart,
+            commands::open_guide,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

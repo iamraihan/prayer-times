@@ -37,6 +37,7 @@ import { PRAYERS, PRAYER_LABELS, type Prayer, type Settings } from "../lib/types
 import { cn } from "../lib/cn";
 import { fmtHourMinute, parseHM } from "../lib/time";
 import { friendlyError } from "../lib/errors";
+import { useGuide } from "../lib/useGuide";
 import { forgetShownTours } from "../lib/useTour";
 
 /**
@@ -61,6 +62,8 @@ export function SettingsPage() {
 
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [tourError, setTourError] = useState<string | null>(null);
+
+  const guide = useGuide();
 
   async function replayTours() {
     setTourError(null);
@@ -512,6 +515,16 @@ export function SettingsPage() {
         <div data-tour="settings-backup" className="divide-y divide-slate-800/80">
           <BackupControls />
         </div>
+        <SettingRow label="Video guide" hint="A walkthrough of setup, alarms and reminders">
+          <Button size="sm" disabled={guide.opening} aria-busy={guide.opening} onClick={() => void guide.open()}>
+            {guide.opening ? "Opening…" : "Watch"}
+          </Button>
+        </SettingRow>
+        {guide.error && (
+          <p role="alert" className="px-4 py-3 text-[13px] text-red-300">
+            {guide.error}
+          </p>
+        )}
         <SettingRow label="Replay tours" hint="Show the tips for each tab again">
           <Button size="sm" onClick={() => void replayTours()}>
             Replay

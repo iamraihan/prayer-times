@@ -53,6 +53,7 @@ interface Commands {
   reset_alarm_tone: [NoArgs, AppState];
   get_autostart: [NoArgs, boolean];
   set_autostart: [{ enabled: boolean }, boolean];
+  open_guide: [NoArgs, void];
 }
 
 function call<K extends keyof Commands>(cmd: K, args: Commands[K][0]): Promise<Commands[K][1]> {
@@ -111,4 +112,7 @@ export const api = {
   getAutostart: () => call("get_autostart", none),
 
   setAutostart: (enabled: boolean) => call("set_autostart", { enabled }),
+
+  /** Opens the tutorial video in its own in-app window. */
+  openGuide: () => call("open_guide", none),
 };

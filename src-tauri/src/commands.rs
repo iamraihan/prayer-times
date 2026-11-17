@@ -13,7 +13,7 @@ use crate::models::{
     AppStateDto, BackupPreviewDto, HistoryMonthDto, HistoryStatus, AsrSchool, CityMatchDto, Coordinates, Location, LocationPreviewDto, Prayer,
     PreviewRequest, Settings, TourStep, TourStepStatus,
 };
-use crate::{geocode, timeutil, tzcountry};
+use crate::{geocode, timeutil, tzcountry, windows};
 use crate::SharedEngine;
 
 fn with_engine<R>(shared: &SharedEngine, f: impl FnOnce(&mut Engine) -> R) -> R {
@@ -27,8 +27,12 @@ pub fn get_state(shared: State<'_, SharedEngine>) -> AppStateDto {
 }
 
 fn http_client() -> Result<reqwest::blocking::Client, String> {
+    http_client_with_timeout(Duration::from_secs(20))
+}
+
+fn http_client_with_timeout(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
+        .timeout(timeout)
         .user_agent(concat!("prayer-times/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())
@@ -394,11 +398,56 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     Ok(autolaunch.is_enabled().unwrap_or(enabled))
 }
 
+// -- video guide ------------------------------------------------------------
+
+/// Opens the tutorial video in its own in-app window (see `windows::open_guide`).
+///
+/// Checks that YouTube is reachable first: offline, the window would open onto
+/// WebKit's bare connection-error page, so the caller shows an error instead.
+/// Async on purpose: building a window from a sync command deadlocks on Windows.
+#[tauri::command]
+pub async fn open_guide(app: AppHandle) -> Result<(), String> {
+    // Already open: just bring it forward, no network check. `open_guide`
+    // checks again under its lock, for clicks that raced past this one.
+    if windows::focus_guide(&app) {
+        return Ok(());
+    }
+    tauri::async_runtime::spawn_blocking(youtube_reachable)
+        .await
+        .map_err(|e| format!("guide check failed: {e}"))??;
+    windows::open_guide(&app)
+}
+
+/// Asks YouTube's connectivity-check endpoint for its empty `204`. Any other
+/// answer means something sits in between (a captive portal's login page, a
+/// filtering proxy) and the video page wouldn't load either.
+///
+/// The errors are technical on purpose: the UI's `friendlyError` turns
+/// connection failures into its standard "check your internet" sentence.
+fn youtube_reachable() -> Result<(), String> {
+    let status = http_client_with_timeout(Duration::from_secs(6))?
+        .head("https://www.youtube.com/generate_204")
+        .send()
+        .map_err(|e| format!("YouTube connectivity check failed: {e}"))?
+        .status();
+    if status == reqwest::StatusCode::NO_CONTENT {
+        Ok(())
+    } else {
+        Err(format!("YouTube connectivity check got {status}, not 204"))
+    }
+}
+
 /// Live-network checks of the location flow. Not run by default (CI has no
 /// business depending on third-party APIs): `cargo test -- --ignored`.
 #[cfg(test)]
 mod network_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "network"]
+    fn youtube_is_reachable_for_the_video_guide() {
+        youtube_reachable().unwrap();
+    }
 
     fn typed(city: &str, country: &str, code: &str) -> PreviewRequest {
         PreviewRequest {
