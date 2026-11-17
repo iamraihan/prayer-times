@@ -1,8 +1,8 @@
 # Architecture
 
-The app is a two-process Tauri 2 desktop app: a web frontend (two windows)
-and a Rust backend that owns all scheduling, so alarms fire even when the
-windows are hidden.
+The app is a two-process Tauri 2 desktop app: a web frontend (two windows,
+plus an on-demand video guide window) and a Rust backend that owns all
+scheduling, so alarms fire even when the windows are hidden.
 
 ```
 ┌────────────────────────── Frontend (TS/React) ──────────────────────────┐
@@ -140,7 +140,16 @@ Rules of thumb:
   shows a warning.
 - **Month-granularity caching** keeps the app fully offline for the current
   month and costs one request per month online.
-- **Fetches happen only on the engine thread, outside the state lock**, so
-  IPC commands never block on the network.
+- **Timetable fetches happen only on the engine thread, outside the state
+  lock**, so state-mutating IPC commands never block on the network. A few
+  read-only commands do their own request on a blocking task, never holding
+  the lock: city search and the wizard preview, and `open_guide`'s check that
+  YouTube is reachable.
+- **Video guide window** (`windows.rs`, label `guide`): opened from the header
+  or Settings, it shows the tutorial's YouTube watch page trimmed to the
+  player. Not the `/embed/` player, which refuses to play from
+  `tauri://localhost` (no Referer, "Error 153"). It has no capability, so the
+  remote page gets no IPC; navigation stays on YouTube and its consent pages,
+  popups are denied, and closing it destroys it (stops playback).
 - **Close-to-tray**: closing the main window hides it; the process keeps
   running so alarms fire (Quit lives in the tray menu).

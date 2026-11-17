@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { CalendarDays, Clock, RefreshCw, Settings } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CalendarDays, CirclePlay, Clock, Loader2, RefreshCw, Settings } from "lucide-react";
 import logo from "./assets/logo.png";
 import { TodayPage } from "./pages/TodayPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -10,6 +10,8 @@ import { startClock, useAppStore } from "./store/useAppStore";
 import { useUpdateStore } from "./store/useUpdateStore";
 import { cn } from "./lib/cn";
 import { useTour } from "./lib/useTour";
+import { useGuide } from "./lib/useGuide";
+import { Toast, type ToastData } from "./components/ui/Toast";
 
 type Tab = "today" | "history" | "settings";
 
@@ -68,6 +70,12 @@ function MainLayout() {
   const [tab, setTab] = useState<Tab>("today");
   useTour(tab);
   const location = useAppStore((s) => s.state?.settings.location ?? null);
+  const guide = useGuide();
+  // Stable identity: Toast restarts its dismiss timer when the object changes.
+  const guideToast = useMemo<ToastData | null>(
+    () => (guide.error ? { kind: "error", message: guide.error } : null),
+    [guide.error],
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -83,17 +91,34 @@ function MainLayout() {
             )}
           </div>
         </div>
-        <nav aria-label="Main" className="flex items-center gap-0.5 rounded-lg bg-slate-900 p-0.5 ring-1 ring-slate-800">
-          <TabButton active={tab === "today"} onClick={() => setTab("today")}>
-            <Clock className="h-3.5 w-3.5" aria-hidden /> Today
-          </TabButton>
-          <TabButton active={tab === "history"} onClick={() => setTab("history")}>
-            <CalendarDays className="h-3.5 w-3.5" aria-hidden /> History
-          </TabButton>
-          <TabButton active={tab === "settings"} onClick={() => setTab("settings")}>
-            <Settings className="h-3.5 w-3.5" aria-hidden /> Settings
-          </TabButton>
-        </nav>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            title="Watch the video guide in a new window"
+            disabled={guide.opening}
+            aria-busy={guide.opening}
+            onClick={() => void guide.open()}
+            className="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-50 disabled:cursor-progress disabled:hover:bg-transparent"
+          >
+            {guide.opening ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <CirclePlay className="h-3.5 w-3.5" aria-hidden />
+            )}
+            Guide
+          </button>
+          <nav aria-label="Main" className="flex items-center gap-0.5 rounded-lg bg-slate-900 p-0.5 ring-1 ring-slate-800">
+            <TabButton active={tab === "today"} onClick={() => setTab("today")}>
+              <Clock className="h-3.5 w-3.5" aria-hidden /> Today
+            </TabButton>
+            <TabButton active={tab === "history"} onClick={() => setTab("history")}>
+              <CalendarDays className="h-3.5 w-3.5" aria-hidden /> History
+            </TabButton>
+            <TabButton active={tab === "settings"} onClick={() => setTab("settings")}>
+              <Settings className="h-3.5 w-3.5" aria-hidden /> Settings
+            </TabButton>
+          </nav>
+        </div>
       </header>
 
       <UpdateBanner />
@@ -108,6 +133,8 @@ function MainLayout() {
           </div>
         </div>
       </main>
+
+      {guideToast && <Toast toast={guideToast} onDismiss={guide.clearError} />}
     </div>
   );
 }
