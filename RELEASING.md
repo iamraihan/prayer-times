@@ -13,6 +13,16 @@ of work; GitHub Actions does the building for all platforms.
 | Updater signing keypair | `~/.tauri/prayer-times.key` (+ `.pub`) | Generated with `pnpm tauri signer generate`. **Backed up somewhere safe** — see warning below. |
 | Public key | `src-tauri/tauri.conf.json` → `plugins.updater.pubkey` | Baked into every build; verifies update signatures. |
 | `TAURI_SIGNING_PRIVATE_KEY` secret | GitHub → Settings → Secrets and variables → Actions | Lets the Release workflow sign update files. |
+| "release tags" ruleset | GitHub → Settings → Rules → Rulesets | Only `iamraihan` may create, move or delete `v*` tags. Source: `.github/rulesets/release-tags.json`; apply with `gh api -X POST repos/iamraihan/prayer-times/rulesets --input .github/rulesets/release-tags.json`. |
+
+### Who can publish a release?
+
+Only someone who can push a `v*` tag to **this** repo. Forks can push tags
+to their own copy, but that runs the workflow in the fork, without this
+repo's secrets, and publishes nothing here. Inside this repo, the "release
+tags" ruleset restricts `v*` tags to the maintainer, and the Release
+workflow's `verify` job refuses to build when the tag is not on `main` or
+doesn't match the version files.
 
 ⚠️ **Never lose the private key.** Every app already installed only trusts
 updates signed with it. If it's lost, all existing installs lose auto-updates
@@ -77,7 +87,9 @@ Apple Developer ID certificate).
 | ------- | ----- | --- |
 | `git push` to main rejected (`GH006: Protected branch`) | Your user is missing from the ruleset bypass list | Settings → Rules → Rules → edit ruleset → Bypass list → add `iamraihan` |
 | Release workflow fails at signing (`missing private key` / env var error) | `TAURI_SIGNING_PRIVATE_KEY` secret missing or wrong content | Re-add the secret; content must be the **entire** `~/.tauri/prayer-times.key` file |
-| Workflow says version/tag mismatch or creates a different tag | Tag number ≠ version in `tauri.conf.json` | Delete the tag (below), fix files, re-tag |
+| `verify` job fails: "does not match the version files" | Tag number ≠ version in one of the three files | Delete the tag (below), fix files, re-tag |
+| `verify` job fails: "not on main" | Tagged a commit that isn't on `main` yet (e.g. a local or feature-branch commit) | Delete the tag, push/merge the commit to `main`, re-tag |
+| `git push origin vX.Y.Z` rejected (`GH013: Repository rule violations`) | Your user is missing from the "release tags" ruleset bypass list | Settings → Rules → Rulesets → "release tags" → Bypass list → add `iamraihan` |
 | Tagged by mistake / want to redo | — | `git tag -d v0.3.0` (local), `git push origin :refs/tags/v0.3.0` (remote), delete the release on GitHub if it was created, then fix and re-tag |
 | Linux build fails: `Package alsa was not found` or another missing system library | A system dev package missing from the workflow's `apt-get install` list | Add the package in **both** `.github/workflows/release.yml` and `ci.yml`, commit, then delete and re-push the tag (re-runs use the old workflow file) |
 | Users don't see the update | They installed a version from before the updater existed (e.g. 0.1.0) | Those users must download v0.2.0+ manually once — from then on updates are automatic |
