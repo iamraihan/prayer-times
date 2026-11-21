@@ -6,7 +6,9 @@
 //! - Tick-based (wall-clock comparison) rather than `sleep_until` tasks, so
 //!   alarms still fire correctly after system sleep/wake or clock changes.
 //! - Events missed while the app was closed fire late within a 10-minute
-//!   grace window; beyond that they are marked as fired silently.
+//!   grace window; beyond that they are marked as fired silently. A Main
+//!   Alarm slept through (machine asleep) rings late on wake while its window
+//!   is open (`schedule::decide`).
 //! - Per-day state follows the Prayer Day (see `schedule::prayer_day`), not
 //!   the calendar day, so an Isha window that runs past midnight keeps its
 //!   alarms, snoozes and done mark until it closes.
@@ -124,6 +126,10 @@ pub struct Engine {
 
     day: Option<NaiveDate>,
     fired: HashSet<String>,
+    /// When the last tick ran. A gap before an alarm's moment means the
+    /// machine was asleep (see `schedule::decide`). In memory only: `None`
+    /// after launch.
+    last_tick: Option<DateTime<Utc>>,
     snoozes: HashMap<Prayer, DateTime<Utc>>,
     done: HashMap<Prayer, DateTime<Utc>>,
     active_alarm: Option<ActiveAlarmState>,
@@ -203,6 +209,7 @@ impl Engine {
             fetch_attempts: HashMap::new(),
             day: rt.day,
             fired: rt.fired.into_iter().collect(),
+            last_tick: None,
             snoozes,
             done,
             active_alarm: None,
@@ -701,6 +708,10 @@ impl Engine {
     // -- the tick ----------------------------------------------------------
 
     pub fn tick(&mut self) {
+        // Every tick counts, the early returns below too: only a gap with no
+        // tick at all (machine asleep) lets a Main Alarm ring late.
+        let wall_now = Utc::now();
+        let last_tick = self.last_tick.replace(wall_now);
         let Some(location) = self.settings.location.clone() else {
             self.apply_tray(
                 "Prayer Times".to_string(),
@@ -717,7 +728,8 @@ impl Engine {
             self.push_state();
             return;
         };
-        let now = Utc::now().with_timezone(&tz);
+        let now = wall_now.with_timezone(&tz);
+        let last_tick = last_tick.map(|t| t.with_timezone(&tz));
         let today = self.prayer_day(now, tz);
 
         // Prayer Day rollover: reset per-day state.
@@ -763,6 +775,7 @@ impl Engine {
             .filter(|(_, at)| **at <= now)
             .map(|(prayer, at)| (*prayer, runtime::encode_dt(at)))
             .collect();
+        let mut snooze_rang = false;
         for (prayer, encoded_at) in due_snoozes {
             self.snoozes.remove(&prayer);
             self.dirty = true;
@@ -774,23 +787,30 @@ impl Engine {
                     let pray_at = schedule::pray_time(w.start, w.end, after);
                     let id = format!("{}|{}|snooze|{}", today, prayer.id(), encoded_at);
                     self.fire(prayer, AlarmKind::Snooze, (w.start, pray_at, w.end), now, id);
+                    snooze_rang = true;
                 }
             }
         }
 
         // Planned events.
-        for event in &events {
-            if self.is_done(event.prayer) {
-                continue;
-            }
+        let decisions = schedule::decide(
+            &events,
+            now,
+            last_tick,
+            |e| self.fired.contains(&schedule::event_id(today, e.prayer, e.kind)),
+            |p| self.is_done(p),
+            snooze_rang,
+        );
+        for (event, decision) in events.iter().zip(decisions) {
             let id = schedule::event_id(today, event.prayer, event.kind);
-            match schedule::due(event.at, now, self.fired.contains(&id)) {
+            match decision {
                 Due::Fire => {
+                    // On time, or a slept-through Main Alarm ringing late.
                     let kind = AlarmKind::from(event.kind);
                     self.fire(event.prayer, kind, (event.start, event.pray_at, event.end), now, id);
                 }
                 Due::SkipMissed => {
-                    // Missed for too long (app closed / asleep): skip silently.
+                    // A Missed Event that doesn't ring late: skip silently.
                     self.fired.insert(id);
                     self.dirty = true;
                 }
@@ -957,6 +977,7 @@ impl Engine {
         self.fetch_attempts.clear();
         self.day = None;
         self.fired.clear();
+        self.last_tick = None;
         self.snoozes.clear();
         self.done.clear();
         self.clear_alarm();

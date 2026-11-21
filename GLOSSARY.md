@@ -86,7 +86,7 @@ The user's mark that they have prayed a prayer in the current Prayer Day. A done
 _Avoid_: Completed, prayed, checked
 
 **Missed Event**:
-An Event whose moment passed more than 10 minutes ago without ringing (the app was closed or the machine was asleep). It is skipped silently.
+An Event whose moment passed more than 10 minutes ago without ringing (the app was closed or the machine was asleep). It is skipped silently, except a Main Alarm the machine slept through: that one rings late on wake while its Prayer Window is still open, unless another alarm rings on the same tick.
 
 ### Tours
 

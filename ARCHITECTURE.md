@@ -64,6 +64,10 @@ scheduling, so alarms fire even when the windows are hidden.
   date, except while yesterday's Isha window is still open past midnight.
 - `fired` (persisted in `runtime.json`) prevents replays after restart;
   on restart, events older than the grace window are marked fired silently.
+- Exception (`schedule::decide`): a Main Alarm the engine slept through (no
+  tick ran at its moment: the machine was asleep, or the clock jumped) rings
+  late while its window is still open, unless another alarm rings on the
+  same tick. Not after a launch: the last tick is in memory only.
 - `done` marks suppress all remaining events of that prayer for the day and
    clear any active alarm/snooze.
 - Changing settings re-derives events; an event whose new time lies in the
@@ -126,7 +130,8 @@ Rules of thumb:
 ## Deliberate decisions
 
 - **Tick loop, not `sleep_until` tasks**: alarms survive system
-  sleep/wake and clock changes; missed events fire late within grace.
+  sleep/wake and clock changes; missed events fire late within grace, and a
+  slept-through Main Alarm rings late while its window is open.
 - **Wall-clock math in the location's IANA zone** (from the API), never the
   device zone.
 - **Per-day state follows the Prayer Day, not the calendar day** — see

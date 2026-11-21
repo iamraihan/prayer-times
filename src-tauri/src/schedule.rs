@@ -264,6 +264,41 @@ pub fn due(at: DateTime<Tz>, now: DateTime<Tz>, already_fired: bool) -> Due {
     }
 }
 
+/// What to do with each of `events` on this tick (same order), from
+/// `due`, with one exception: a Main Alarm the engine slept through rings
+/// late instead of being skipped as a Missed Event. That needs all of:
+/// - the last tick (`last_tick`) came before the alarm's moment, so no tick
+///   ran when it was due (the machine was asleep, or the clock jumped);
+/// - its Prayer Window is still open and the prayer isn't Done;
+/// - no other alarm rings on this tick (an on-time event, or a snooze:
+///   `snooze_rang`), so waking never rings two alarms at once.
+///
+/// `last_tick` is `None` right after launch, so opening the app mid-window
+/// keeps the silent skip, as does a settings change while the engine ticks.
+pub fn decide(
+    events: &[PlannedEvent],
+    now: DateTime<Tz>,
+    last_tick: Option<DateTime<Tz>>,
+    is_fired: impl Fn(&PlannedEvent) -> bool,
+    is_done: impl Fn(Prayer) -> bool,
+    snooze_rang: bool,
+) -> Vec<Due> {
+    let mut out: Vec<Due> = events
+        .iter()
+        .map(|e| if is_done(e.prayer) { Due::Wait } else { due(e.at, now, is_fired(e)) })
+        .collect();
+    let other_rings = snooze_rang || out.contains(&Due::Fire);
+    if !other_rings {
+        for (e, d) in events.iter().zip(out.iter_mut()) {
+            let slept_through = last_tick.is_some_and(|t| t < e.at);
+            if *d == Due::SkipMissed && e.kind == EventKind::Start && slept_through && now < e.end {
+                *d = Due::Fire;
+            }
+        }
+    }
+    out
+}
+
 /// The prayer the UI should feature: the open window of a prayer that isn't
 /// done (`true` = current), else the earliest window still to start
 /// (`false`). `None` means nothing is left in this Prayer Day. Works from
@@ -656,6 +691,159 @@ mod tests {
         assert_eq!(due(ev, mins(1), true), Due::Wait);
         assert_eq!(due(ev, mins(60), true), Due::Wait);
         assert_eq!(due(ev, mins(-5), true), Due::Rearm);
+    }
+
+    // -- decide (late Main Alarm) ---------------------------------------------
+
+    /// Dhaka 2026-11-09 with default settings: Asr 15:40 → 17:20, Main Alarm
+    /// at 15:40, Before-End Warning at 17:10.
+    fn dhaka_events(settings: &Settings) -> Vec<PlannedEvent> {
+        compute(&dhaka_day("2026-11-09"), DHAKA, settings, None)
+    }
+
+    /// The decision for one prayer's event when nothing has fired yet.
+    fn decided(
+        events: &[PlannedEvent],
+        prayer: Prayer,
+        kind: EventKind,
+        now: DateTime<Tz>,
+        last_tick: Option<DateTime<Tz>>,
+        snooze_rang: bool,
+    ) -> Due {
+        let i = events
+            .iter()
+            .position(|e| e.prayer == prayer && e.kind == kind)
+            .unwrap();
+        decide(events, now, last_tick, |_| false, |_| false, snooze_rang)[i]
+    }
+
+    #[test]
+    fn main_alarm_slept_through_rings_late_while_window_open() {
+        let events = dhaka_events(&Settings::default());
+        // Asleep from 15:30, woke at 16:10: 30 min past the Main Alarm.
+        let last_tick = Some(at(DHAKA, "2026-11-09", "15:30"));
+        let now = at(DHAKA, "2026-11-09", "16:10");
+        let start = find(&events, Prayer::Asr, EventKind::Start).unwrap();
+        assert_eq!(due(start.at, now, false), Due::SkipMissed);
+        assert_eq!(decided(&events, Prayer::Asr, EventKind::Start, now, last_tick, false), Due::Fire);
+    }
+
+    #[test]
+    fn main_alarm_not_late_once_window_closed() {
+        let events = dhaka_events(&Settings::default());
+        let last_tick = Some(at(DHAKA, "2026-11-09", "15:30"));
+        let now = at(DHAKA, "2026-11-09", "17:20");
+        assert_eq!(
+            decided(&events, Prayer::Asr, EventKind::Start, now, last_tick, false),
+            Due::SkipMissed
+        );
+    }
+
+    #[test]
+    fn main_alarm_not_late_when_engine_was_ticking() {
+        // A settings change moved the Main Alarm into the past while the
+        // engine kept ticking: stays a silent Missed Event.
+        let events = dhaka_events(&Settings::default());
+        let now = at(DHAKA, "2026-11-09", "16:10");
+        let recent = Some(now - Duration::seconds(15));
+        let skip = |last_tick| decided(&events, Prayer::Asr, EventKind::Start, now, last_tick, false);
+        assert_eq!(skip(recent), Due::SkipMissed);
+        // No tick yet (app just launched): unchanged behaviour.
+        assert_eq!(skip(None), Due::SkipMissed);
+    }
+
+    #[test]
+    fn late_main_alarm_yields_to_before_end_warning() {
+        // Woke at 17:15, inside the Before-End Warning's grace: only it rings.
+        let events = dhaka_events(&Settings::default());
+        let last_tick = Some(at(DHAKA, "2026-11-09", "15:30"));
+        let now = at(DHAKA, "2026-11-09", "17:15");
+        let d = |kind| decided(&events, Prayer::Asr, kind, now, last_tick, false);
+        assert_eq!(d(EventKind::PreEnd), Due::Fire);
+        assert_eq!(d(EventKind::Start), Due::SkipMissed);
+    }
+
+    #[test]
+    fn late_main_alarm_yields_to_next_prayers_get_ready() {
+        // Maghrib's Get Ready at 17:05; woke at 17:06 inside Asr's window.
+        let mut settings = Settings::default();
+        settings.get_ready_enabled = true;
+        settings.get_ready_minutes = 15;
+        let events = dhaka_events(&settings);
+        let last_tick = Some(at(DHAKA, "2026-11-09", "15:30"));
+        let now = at(DHAKA, "2026-11-09", "17:06");
+        let d = |prayer, kind| decided(&events, prayer, kind, now, last_tick, false);
+        assert_eq!(d(Prayer::Maghrib, EventKind::GetReady), Due::Fire);
+        assert_eq!(d(Prayer::Asr, EventKind::Start), Due::SkipMissed);
+    }
+
+    #[test]
+    fn late_main_alarm_yields_to_a_snooze() {
+        let events = dhaka_events(&Settings::default());
+        let last_tick = Some(at(DHAKA, "2026-11-09", "15:30"));
+        let now = at(DHAKA, "2026-11-09", "16:10");
+        assert_eq!(
+            decided(&events, Prayer::Asr, EventKind::Start, now, last_tick, true),
+            Due::SkipMissed
+        );
+    }
+
+    #[test]
+    fn only_the_main_alarm_rings_late() {
+        // Warning at 16:50; woke at 17:15, past its grace, window still open.
+        let mut settings = Settings::default();
+        settings.pre_end_warning_minutes = 30;
+        let events = dhaka_events(&settings);
+        let last_tick = Some(at(DHAKA, "2026-11-09", "15:30"));
+        let now = at(DHAKA, "2026-11-09", "17:15");
+        let d = |kind| decided(&events, Prayer::Asr, kind, now, last_tick, false);
+        assert_eq!(d(EventKind::PreEnd), Due::SkipMissed);
+        assert_eq!(d(EventKind::Start), Due::Fire);
+    }
+
+    #[test]
+    fn done_prayer_never_rings_late() {
+        let events = dhaka_events(&Settings::default());
+        let last_tick = Some(at(DHAKA, "2026-11-09", "15:30"));
+        let now = at(DHAKA, "2026-11-09", "16:10");
+        let i = events
+            .iter()
+            .position(|e| e.prayer == Prayer::Asr && e.kind == EventKind::Start)
+            .unwrap();
+        let out = decide(&events, now, last_tick, |_| false, |p| p == Prayer::Asr, false);
+        assert_eq!(out[i], Due::Wait);
+    }
+
+    #[test]
+    fn isha_main_alarm_slept_through_rings_late_after_midnight() {
+        // London summer Isha 22:55 → 01:05; asleep 22:50, woke 00:30.
+        let events = compute(&london_summer_day("2026-06-20"), LONDON, &Settings::default(), None);
+        let last_tick = Some(at(LONDON, "2026-06-20", "22:50"));
+        let now = at(LONDON, "2026-06-21", "00:30");
+        assert_eq!(decided(&events, Prayer::Isha, EventKind::Start, now, last_tick, false), Due::Fire);
+    }
+
+    #[test]
+    fn overnight_sleep_into_fajr_rings_late() {
+        // Lid closed 23:00, opened 05:30 the next day: Fajr 05:00 → 06:15.
+        let events = dhaka_events(&Settings::default());
+        let last_tick = Some(at(DHAKA, "2026-11-08", "23:00"));
+        let now = at(DHAKA, "2026-11-09", "05:30");
+        assert_eq!(decided(&events, Prayer::Fajr, EventKind::Start, now, last_tick, false), Due::Fire);
+    }
+
+    #[test]
+    fn sleep_across_dst_spring_forward_rings_late() {
+        // London 2026-03-29: clocks jump 01:00 GMT → 02:00 BST. Asleep 00:30
+        // GMT, woke 05:10 BST; Fajr 04:45 BST → sunrise 06:40.
+        let day = day(
+            "2026-03-29",
+            ["04:45", "06:40", "13:05", "16:40", "19:30", "20:55", "01:05"],
+        );
+        let events = compute(&day, LONDON, &Settings::default(), None);
+        let last_tick = Some(at(LONDON, "2026-03-29", "00:30"));
+        let now = at(LONDON, "2026-03-29", "05:10");
+        assert_eq!(decided(&events, Prayer::Fajr, EventKind::Start, now, last_tick, false), Due::Fire);
     }
 
     // -- featured ------------------------------------------------------------
