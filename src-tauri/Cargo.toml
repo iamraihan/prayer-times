@@ -1,6 +1,6 @@
 [package]
 name = "prayer-times"
-version = "0.5.0"
+version = "0.5.1"
 description = "Prayer times with tray status, alarms and reminders"
 authors = ["Raihan Ali"]
 license = "MIT"
