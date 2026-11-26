@@ -25,6 +25,6 @@ endsAt: string | null,
  */
 prayAt: string | null, 
 /**
- * Where `pray_at` comes from; `organization` = locked.
+ * Where `pray_at` comes from; `organization` = a Followed Prayer.
  */
 ownTimeSource: OwnTimeSource, };

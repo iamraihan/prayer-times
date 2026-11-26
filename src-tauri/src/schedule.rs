@@ -120,6 +120,66 @@ pub fn own_prayer_time(
     }
 }
 
+/// The Own Prayer Time of `prayer` for its window `[start, end)`, from the
+/// user's settings and the followed Organization's times (if any).
+pub fn own_prayer_time_for(
+    prayer: Prayer,
+    start: DateTime<Tz>,
+    end: DateTime<Tz>,
+    settings: &Settings,
+    organization: Option<&OrganizationPrayers>,
+) -> OwnPrayerTime {
+    own_prayer_time(
+        start,
+        end,
+        settings.prayer_settings.get(prayer).pray_after_minutes,
+        organization.and_then(|o| o.get(prayer)),
+    )
+}
+
+// -- Organization Feed refresh ------------------------------------------------
+
+/// The followed Organization's feed is fetched again daily at this Location
+/// Time (or at the first tick after it, when the app wasn't running then).
+pub const ORGANIZATION_REFRESH_AT: (u32, u32) = (13, 0);
+/// After a failed fetch of the feed, wait this long before trying again.
+pub const ORGANIZATION_RETRY_AFTER_MINUTES: i64 = 15;
+
+/// Whether to fetch the followed Organization's feed at `now` (Location
+/// Time): never fetched, the latest attempt failed, or not fetched since the
+/// latest `ORGANIZATION_REFRESH_AT`; but never within
+/// `ORGANIZATION_RETRY_AFTER_MINUTES` of a failed attempt.
+pub fn organization_refresh_due(
+    last_success: Option<DateTime<chrono::Utc>>,
+    last_failure: Option<DateTime<chrono::Utc>>,
+    now: DateTime<Tz>,
+) -> bool {
+    if let Some(failed) = last_failure {
+        if now.with_timezone(&chrono::Utc) - failed < Duration::minutes(ORGANIZATION_RETRY_AFTER_MINUTES) {
+            return false;
+        }
+        // Retry any failure that came after the last success (a manual
+        // Refresh after today's check, say), not only the daily one.
+        if last_success.is_none_or(|ok| failed > ok) {
+            return true;
+        }
+    }
+    let Some(last) = last_success else {
+        return true;
+    };
+    let local_now = now.naive_local();
+    let (h, m) = ORGANIZATION_REFRESH_AT;
+    let Some(today_at) = local_now.date().and_hms_opt(h, m, 0) else {
+        return true;
+    };
+    let boundary = if local_now >= today_at {
+        today_at
+    } else {
+        today_at - Duration::days(1)
+    };
+    last.with_timezone(&now.timezone()).naive_local() < boundary
+}
+
 /// The end of a prayer's valid window:
 /// Fajr → sunrise, Dhuhr → Asr, Asr → Maghrib, Maghrib → Isha, Isha → midnight.
 pub fn end_time_of(prayer: Prayer, day: &DayTimings) -> NaiveTime {
@@ -178,12 +238,7 @@ pub fn windows(
         .filter(|p| settings.prayer_settings.get(*p).enabled)
         .filter_map(|prayer| {
             let (start, end) = window(prayer, day, tz)?;
-            let OwnPrayerTime { at, .. } = own_prayer_time(
-                start,
-                end,
-                settings.prayer_settings.get(prayer).pray_after_minutes,
-                organization.and_then(|o| o.get(prayer)),
-            );
+            let OwnPrayerTime { at, .. } = own_prayer_time_for(prayer, start, end, settings, organization);
             Some(PrayerWindow {
                 prayer,
                 start,

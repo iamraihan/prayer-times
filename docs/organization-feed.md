@@ -1,6 +1,6 @@
-# Publishing your masjid's jamaat times
+# Publishing your jamaat times (for masjids and organizations)
 
-Prayer Times can follow your masjid's jamaat times. You publish one small JSON file at an `https://` link and share the link with your members. Each member pastes it into **Settings → Masjid / Organization**. Members don't need accounts.
+Prayer Times can follow the jamaat times of your masjid or organization. You publish one small JSON file at an `https://` link and share the link with your members. Each member pastes it into **Settings → Masjid / Organization**. Members don't need accounts.
 
 The prayers you list are set to your times and members can't change them. Any prayer you leave out keeps the time the app calculates, which members can adjust themselves. When you change a time, members get it the next day at 13:00, or straight away if they press **Refresh now**.
 
@@ -30,7 +30,7 @@ To try one in the app, paste its raw link, for example `https://raw.githubuserco
 
 | Field | Required | What it is |
 |---|---|---|
-| `name` | yes | Your masjid's name, as members will see it. |
+| `name` | yes | Your masjid's or organization's name, as members will see it. |
 | `timezone` | yes | Your [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. `Asia/Dhaka`, `Europe/London`. It must match the member's city: a member elsewhere can't follow you. |
 | `updatedAt` | no | When you last changed the times, in [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) format. |
 | `prayers` | yes | The jamaat time of each prayer you set. |
@@ -52,7 +52,7 @@ The app rejects the whole file if anything in it is wrong. Members keep your las
 
 Anywhere that serves the file over `https://` works:
 
-- your masjid's website, e.g. `https://your-masjid.org/prayer-times.json`;
+- your own website, e.g. `https://example.org/prayer-times.json`;
 - GitHub Pages, or the "Raw" link of a file in a public GitHub repository or Gist;
 - your dashboard, if it can return this JSON at a fixed link.
 

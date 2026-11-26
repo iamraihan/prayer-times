@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::models::{
-    OrganizationLink, OrganizationPrayerDto, OrganizationPreviewDto, OrganizationStatusDto, Prayer,
+    OrganizationLink, OrganizationPreviewDto, OrganizationStatusDto, OrganizationTimesDto, Prayer,
+    RelativeDay,
 };
 
 /// A parsed, validated Organization Feed.
@@ -257,7 +258,7 @@ impl fmt::Display for FetchError {
 pub const MAX_FEED_BYTES: u64 = 1024 * 1024;
 
 /// Downloads the feed at `link` (https only), sending the access key as a
-/// Bearer token when there is one. Returns the body; `parse_feed` checks it.
+/// Bearer credential (`Authorization: Bearer <access key>`) when there is one. Returns the body; `parse_feed` checks it.
 pub fn fetch(client: &reqwest::blocking::Client, link: &OrganizationLink) -> Result<String, FetchError> {
     fetch_url(client, &link.feed_url, link.access_key.as_deref(), false)
 }
@@ -315,11 +316,6 @@ fn fetch_url(
 // Refresh and failure policy
 // ---------------------------------------------------------------------------
 
-/// The daily refresh happens at this Location Time (or at the first tick
-/// after it, when the app wasn't running then).
-pub const DAILY_REFRESH_AT: (u32, u32) = (13, 0);
-/// After a failed fetch, wait this long before trying again.
-pub const RETRY_AFTER_MINUTES: i64 = 15;
 /// Warn about an unreachable feed only after it has failed for this long.
 pub const WARN_UNREACHABLE_AFTER_HOURS: i64 = 24;
 
@@ -366,29 +362,14 @@ impl OrganizationState {
         &self.feed_url
     }
 
-    /// Whether to fetch the feed now (`now` in Location Time): never
-    /// fetched, or not fetched since the latest `DAILY_REFRESH_AT` — but not
-    /// within `RETRY_AFTER_MINUTES` of a failed attempt.
+    /// Whether to fetch the feed now (`now` in Location Time); see
+    /// `schedule::organization_refresh_due`.
     pub fn refresh_due(&self, now: DateTime<Tz>) -> bool {
-        if let Some(f) = &self.last_failure {
-            if now.with_timezone(&Utc) - f.at < Duration::minutes(RETRY_AFTER_MINUTES) {
-                return false;
-            }
-        }
-        let Some(last) = self.last_success else {
-            return true;
-        };
-        let local_now = now.naive_local();
-        let (h, m) = DAILY_REFRESH_AT;
-        let Some(today_at) = local_now.date().and_hms_opt(h, m, 0) else {
-            return true;
-        };
-        let boundary = if local_now >= today_at {
-            today_at
-        } else {
-            today_at - Duration::days(1)
-        };
-        last.with_timezone(&now.timezone()).naive_local() < boundary
+        crate::schedule::organization_refresh_due(
+            self.last_success,
+            self.last_failure.as_ref().map(|f| f.at),
+            now,
+        )
     }
 
     /// Records a fetch: `Ok(body)` is a downloaded document. A document
@@ -521,16 +502,30 @@ fn host_of(url: &str) -> String {
         .unwrap_or_default()
 }
 
-fn prayer_dtos(prayers: &OrganizationPrayers) -> Vec<OrganizationPrayerDto> {
-    Prayer::ALL
-        .into_iter()
-        .filter_map(|p| {
-            prayers.get(p).map(|t| OrganizationPrayerDto {
-                prayer: p,
-                time: t.format("%H:%M").to_string(),
-            })
-        })
-        .collect()
+fn times_dto(prayers: &OrganizationPrayers) -> OrganizationTimesDto {
+    let hm = |t: Option<NaiveTime>| t.map(|t| t.format("%H:%M").to_string());
+    OrganizationTimesDto {
+        fajr: hm(prayers.fajr),
+        dhuhr: hm(prayers.dhuhr),
+        asr: hm(prayers.asr),
+        maghrib: hm(prayers.maghrib),
+        isha: hm(prayers.isha),
+    }
+}
+
+/// The calendar day (Location Time) of `at`, relative to `now`'s.
+fn relative_day(at: DateTime<Utc>, now: DateTime<Tz>) -> RelativeDay {
+    let day = at.with_timezone(&now.timezone()).date_naive();
+    let today = now.date_naive();
+    if day == today {
+        RelativeDay::Today
+    } else if Some(day) == today.pred_opt() {
+        RelativeDay::Yesterday
+    } else if day < today {
+        RelativeDay::Earlier
+    } else {
+        RelativeDay::Later
+    }
 }
 
 pub fn preview_dto(feed_url: &str, feed: &OrganizationFeed) -> OrganizationPreviewDto {
@@ -539,7 +534,7 @@ pub fn preview_dto(feed_url: &str, feed: &OrganizationFeed) -> OrganizationPrevi
         host: host_of(feed_url),
         timezone: feed.timezone.clone(),
         updated_at: feed.updated_at.map(|t| t.to_rfc3339()),
-        prayers: prayer_dtos(&feed.prayers),
+        times: times_dto(&feed.prayers),
     }
 }
 
@@ -550,9 +545,14 @@ pub fn status_dto(link: &OrganizationLink, state: &OrganizationState, now: DateT
         feed_url: link.feed_url.clone(),
         host: host_of(&link.feed_url),
         name: state.feed().map(|f| f.name.clone()),
-        prayers: state.prayers(tz.name()).map(prayer_dtos).unwrap_or_default(),
+        times: state.prayers(tz.name()).map(times_dto).unwrap_or_default(),
         updated_at: state.feed().and_then(|f| f.updated_at).map(|t| t.to_rfc3339()),
         last_fetched_at: state.last_success().map(|t| t.with_timezone(&tz).to_rfc3339()),
+        last_fetched_day: state.last_success().map(|t| relative_day(t, now)),
+        daily_check: {
+            let (h, m) = crate::schedule::ORGANIZATION_REFRESH_AT;
+            format!("{h:02}:{m:02}")
+        },
         warning: state.warning(now),
     }
 }
@@ -798,6 +798,16 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_after_todays_fetch_is_retried_too() {
+        // Fetched at 13:00; a manual Refresh at 15:00 fails. It is retried
+        // 15 minutes later, not tomorrow.
+        let mut st = fetched_at("2026-11-26 13:00");
+        st.record(Err(FetchError::Unreachable("offline".into())), DHAKA, utc("2026-11-26 15:00"));
+        assert!(!st.refresh_due(dhaka("2026-11-26 15:14")));
+        assert!(st.refresh_due(dhaka("2026-11-26 15:15")));
+    }
+
+    #[test]
     fn a_good_document_replaces_the_times_and_clears_the_warning() {
         let mut st = fetched_at("2026-11-25 13:00");
         st.record(Err(FetchError::AccessKeyRejected), DHAKA, utc("2026-11-26 13:00"));
@@ -976,10 +986,25 @@ mod tests {
         let dto = status_dto(&link, &st, dhaka("2026-11-26 14:00"));
         assert_eq!(dto.host, "baitulaman.example");
         assert_eq!(dto.name.as_deref(), Some("Baitul Aman Masjid"));
-        let covered: Vec<_> = dto.prayers.iter().map(|p| (p.prayer, p.time.as_str())).collect();
-        assert_eq!(covered, [(Prayer::Fajr, "05:30"), (Prayer::Asr, "16:00")]);
+        assert_eq!(dto.times.fajr.as_deref(), Some("05:30"));
+        assert_eq!(dto.times.asr.as_deref(), Some("16:00"));
+        assert_eq!(dto.times.dhuhr, None);
         assert_eq!(dto.last_fetched_at.as_deref(), Some("2026-11-26T13:00:00+06:00"));
+        assert_eq!(dto.last_fetched_day, Some(RelativeDay::Today));
+        assert_eq!(dto.daily_check, "13:00");
         assert_eq!(dto.warning, None);
+    }
+
+    #[test]
+    fn the_last_check_is_dated_by_calendar_day_in_location_time() {
+        let link = OrganizationLink { feed_url: "https://m.example/f.json".into(), access_key: None };
+        // 23:50 Dhaka on the 25th is "yesterday" at 00:10 on the 26th
+        // (before Fajr, while the Prayer Day is still the 25th).
+        let st = fetched_at("2026-11-25 23:50");
+        let at = |when| status_dto(&link, &st, dhaka(when)).last_fetched_day;
+        assert_eq!(at("2026-11-26 00:10"), Some(RelativeDay::Yesterday));
+        assert_eq!(at("2026-11-25 23:59"), Some(RelativeDay::Today));
+        assert_eq!(at("2026-11-28 09:00"), Some(RelativeDay::Earlier));
     }
 
     // -- The published examples (docs/examples/) ---------------------------------

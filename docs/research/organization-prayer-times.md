@@ -6,7 +6,7 @@ Status: research note, 2026-11-26. Nothing here is implemented yet.
 
 **Short answer.** Joining needs **no auth**. To join, the app saves a feed URL in `Settings` on this device and fetches it read-only over HTTPS. Nobody's identity is involved, and the server never learns who "joined". Auth exists only on the **write side**: the organization uploads its file to its own website or host, using whatever login that host already has. That is outside this app. The simplest first version is **"paste the organization's feed link"** (plus an optional access key), followed by a confirmation screen. Deep links and a short-code directory can come later.
 
-**Decided 2026-11-26** (see §4–§6; later the same day `ETag` was dropped and the daily fetch fixed at 13:00 Location Time, see ADR 0002): the feed is a flat list of the current **jamaat times** for 1–5 prayers, no dates; they lock those prayers' Own Prayer Time only, and the Prayer Window stays on Aladhan; the app polls once a day (no webhook) with `ETag`; an optional access key goes in a `Bearer` header.
+**Decided 2026-11-26** (see §4–§6; later the same day `ETag` was dropped and the daily fetch fixed at 13:00 Location Time, see ADR 0002): the feed is a flat list of the current **jamaat times** for 1–5 prayers, no dates; they lock those prayers' Own Prayer Time only, and the Prayer Window stays on Aladhan; the app polls on Follow/Save and then once a day at 13:00 (no webhook, no `ETag`); an optional access key goes in a `Bearer` header.
 
 ---
 
@@ -136,14 +136,14 @@ Rules:
 
 A webhook means the organization's server calls the client. A desktop app has no public address to call, so this is **polling**: the app asks the feed URL.
 
-- Fetch when the user follows or saves the organization settings, at launch if the last good fetch is older than 24 h, once a day while running, after the device wakes, and on a "Refresh now" button.
-- Send `If-None-Match` with the stored `ETag`; a `304 Not Modified` costs the organization almost nothing.
+- Fetch when the user follows or saves the organization settings, then once a day at 13:00 Location Time (at the next run when the app was off then), and on a "Refresh now" button. Retry 15 minutes after any failure.
+- No `ETag`: one small request per member per day costs the organization nothing worth the extra state (ADR 0002).
 - A changed time applies from the next event computation; an event that moves is re-armed by `Due::Rearm` (`schedule.rs:244-266`).
 
 ### Optional access key
 
 - One optional field in the organization settings, "Access key". When set, the app sends `Authorization: Bearer <key>` (never in the URL, which ends up in server logs).
-- It is **not** real security: every member gets the same key, and anyone can read it from the app or the settings file. It lets the organization rotate keys, count use, and rate-limit callers without one. Protection against excess calls comes mainly from the once-a-day fetch and `304` responses.
+- It is **not** real security: every member gets the same key, and anyone can read it from the app or the settings file. It lets the organization rotate keys, count use, and rate-limit callers without one. Protection against excess calls comes mainly from the once-a-day fetch.
 - v1 stores it in `settings.json` (plain text); the OS keychain (`keyring` crate) is a later improvement.
 - HTTP `401`/`403`: keep the last good feed and show "access key rejected".
 
@@ -172,7 +172,7 @@ A webhook means the organization's server calls the client. A desktop app has no
    - Feed types (deserialize only): `OrganizationFeed { name: String, timezone: String, updated_at: Option<DateTime<FixedOffset>>, prayers: OrganizationPrayers }`, where `OrganizationPrayers` is a **struct with one field per prayer** (`fajr: Option<NaiveTime>, … isha: Option<NaiveTime>`), `deny_unknown_fields` on this struct only, never `HashMap<Prayer, _>`.
    - IPC: the snapshot gets `organization: Option<OrganizationStatusDto>` (name, last refreshed, warning). `PrayerTimeDto` (`models.rs:564-577`) gets `locked: bool` plus the Own Prayer Time instant, so the UI shows a lock icon and disables the editor. Commands `preview_organization(feedUrl, accessKey)`, `follow_organization(feedUrl, accessKey)`, `leave_organization()`, `refresh_organization()`, each added to the `Commands` table in `src/lib/ipc.ts:32`.
 3. **Pure logic in `schedule.rs`**: `compute` takes an optional `&OrganizationPrayers` and, per prayer, uses the organization time when present and valid for that day, else `prayAfterMinutes`. Failing tests first: 3 of 5 covered; leaving restores `prayAfterMinutes`; organization time outside the window or in its last 5 minutes is ignored with a warning; DST gap and overlap; Isha congregation after 00:00; the 1st of a month; feed timezone ≠ Location timezone rejected; unknown prayer key rejected.
-4. **Engine**: an organization fetch job next to the month jobs, planned under the lock and fetched outside it (`engine.rs:1290-1335`), on the schedule in §4 with `ETag`. Store the last good document and its `ETag` as `cache/organization.json`. Drop a result whose `feed_url` no longer matches the settings.
+4. **Engine**: an organization fetch job next to the month jobs, planned under the lock and fetched outside it (`engine.rs:1290-1335`), on the schedule in §4. Store the last good document as `cache/organization.json`. Drop a result whose `feed_url` no longer matches the settings.
 5. **Failure policy**: unreachable or `5xx` → keep the last good feed, warn after 24 h; malformed, unknown prayer key, wrong timezone, `401`/`403` → reject the whole document, keep the last good one, warn. No last good feed → no overrides at all.
 6. Add `#[ignore = "network"]` tests for the feed fetch next to `commands::network_tests` (`commands.rs:443`), using a fixture feed on a stable host.
 7. A one-page "How to publish your masjid's times" guide for organizations (the format in §4, how to host a static JSON file).

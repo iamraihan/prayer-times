@@ -16,33 +16,29 @@ import {
   PRAYERS,
   PRAYER_LABELS,
   type OrganizationLink,
-  type OrganizationPrayer,
   type OrganizationPreview,
   type OrganizationStatus,
+  type OrganizationTimes,
+  type RelativeDay,
 } from "../lib/types";
 
 type Busy = "preview" | "follow" | "refresh" | "leave" | null;
 
-/** The daily refresh time (`organization::DAILY_REFRESH_AT`). */
-const DAILY_CHECK = "13:00";
-
 /**
- * "Masjid / Organization": follow a feed of jamaat times. The prayers it
- * lists get the Organization's time (locked); the others stay the user's.
+ * "Masjid / Organization": follow an Organization Feed. Each prayer it
+ * lists becomes a Followed Prayer with the Organization's time; the others
+ * stay the user's.
  * The feed is fetched on Follow/Save and then once a day at 13:00.
  */
 export function OrganizationSettings({
   link,
   status,
   hasLocation,
-  today,
   mode,
 }: {
   link: OrganizationLink | null;
   status: OrganizationStatus | null;
   hasLocation: boolean;
-  /** Today's date in Location Time ("YYYY-MM-DD"), to date the last check. */
-  today: string | undefined;
   mode: TimeFormat;
 }) {
   const [url, setUrl] = useState(link?.feedUrl ?? "");
@@ -170,7 +166,7 @@ export function OrganizationSettings({
           }
           hint={
             status.lastFetchedAt
-              ? `${status.host} · updated ${whenLabel(status.lastFetchedAt, today, mode)}`
+              ? `${status.host} · updated ${whenLabel(status.lastFetchedAt, status.lastFetchedDay, mode)}`
               : status.host
           }
         >
@@ -184,9 +180,9 @@ export function OrganizationSettings({
           </Button>
         </SettingRow>
         <div className="space-y-2.5 px-4 py-3.5">
-          <JamaatTimes prayers={status.prayers} mode={mode} />
+          <OrganizationTimeRow times={status.times} mode={mode} />
           <p className="text-[12px] leading-relaxed text-slate-500">
-            Checks for new times every day at {fmtHM(DAILY_CHECK, mode)}.{" "}
+            Checks for new times every day at {fmtHM(status.dailyCheck, mode)}.{" "}
             {!editing && (
               <button
                 type="button"
@@ -223,10 +219,8 @@ export function OrganizationSettings({
     );
   } else if (preview) {
     // Checked, waiting for confirmation.
-    const covered = preview.prayers.map((p) => PRAYER_LABELS[p.prayer]);
-    const yours = PRAYERS.filter((p) => !preview.prayers.some((x) => x.prayer === p)).map(
-      (p) => PRAYER_LABELS[p],
-    );
+    const covered = PRAYERS.filter((p) => preview.times[p] !== null).map((p) => PRAYER_LABELS[p]);
+    const yours = PRAYERS.filter((p) => preview.times[p] === null).map((p) => PRAYER_LABELS[p]);
     body = (
       <>
         <div className="space-y-3.5 px-4 py-4">
@@ -239,7 +233,7 @@ export function OrganizationSettings({
               {preview.host} · {preview.timezone}
             </p>
           </div>
-          <JamaatTimes prayers={preview.prayers} mode={mode} />
+          <OrganizationTimeRow times={preview.times} mode={mode} />
           <p className="text-[13px] leading-relaxed text-slate-400">
             {listOf(covered)} will follow its times and can't be changed here.
             {yours.length > 0 && ` ${listOf(yours)} stay${yours.length === 1 ? "s" : ""} yours.`}
@@ -294,25 +288,25 @@ export function OrganizationSettings({
 }
 
 /** All five prayers in one row: the Organization's time, or "Yours". */
-function JamaatTimes({ prayers, mode }: { prayers: OrganizationPrayer[]; mode: TimeFormat }) {
+function OrganizationTimeRow({ times, mode }: { times: OrganizationTimes; mode: TimeFormat }) {
   return (
     <dl className="grid grid-cols-5 gap-x-3" aria-label="Jamaat times">
       {PRAYERS.map((p) => {
-        const covered = prayers.find((x) => x.prayer === p);
+        const time = times[p];
         return (
           <div key={p} className="min-w-0">
             <dt className="text-[12px] text-slate-500">{PRAYER_LABELS[p]}</dt>
             <dd
               className={
-                covered
+                time !== null
                   ? "tnum mt-0.5 flex items-center gap-1 text-sm font-medium text-emerald-200"
                   : "mt-0.5 text-sm text-slate-500"
               }
             >
-              {covered ? (
+              {time !== null ? (
                 <>
                   <Lock className="h-3 w-3 shrink-0 text-emerald-400/80" aria-hidden />
-                  {fmtHM(covered.time, mode)}
+                  {fmtHM(time, mode)}
                 </>
               ) : (
                 "Yours"
@@ -325,17 +319,15 @@ function JamaatTimes({ prayers, mode }: { prayers: OrganizationPrayer[]; mode: T
   );
 }
 
-/** "today 1:00 PM" / "yesterday 1:00 PM" / "Nov 24, 1:00 PM", from an
- * RFC3339 string carrying the Location's offset. */
-function whenLabel(iso: string, today: string | undefined, mode: TimeFormat): string {
-  const day = iso.slice(0, 10);
+/** "today 1:00 PM" / "yesterday 1:00 PM" / "Nov 24, 1:00 PM". The day
+ * comes from Rust (`lastFetchedDay`); the date and time are read straight
+ * from the RFC3339 string, which carries the Location's offset. */
+function whenLabel(iso: string, day: RelativeDay | null, mode: TimeFormat): string {
   const time = fmtInstant(iso, mode);
-  if (!today) return time;
-  if (day === today) return `today ${time}`;
-  const t = Date.parse(`${today}T00:00:00Z`);
-  if (Date.parse(`${day}T00:00:00Z`) === t - 86_400_000) return `yesterday ${time}`;
+  if (day === "today") return `today ${time}`;
+  if (day === "yesterday") return `yesterday ${time}`;
   const date = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(
-    new Date(`${day}T00:00:00Z`),
+    new Date(`${iso.slice(0, 10)}T00:00:00Z`),
   );
   return `${date}, ${time}`;
 }

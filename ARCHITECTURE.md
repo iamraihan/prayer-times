@@ -52,9 +52,10 @@ scheduling, so alarms fire even when the windows are hidden.
    are cached per `(location, method, school, year, month)`; a fetch that
    finishes after the location changed is dropped.
 3. **Organization Feed** — while the user follows an Organization,
-   `plan_organization_fetch` asks `OrganizationState::refresh_due`: never
-   fetched, or not since the latest 13:00 Location Time (15-minute retry
-   after a failure). The last good document is kept in
+   `plan_organization_fetch` asks `schedule::organization_refresh_due`:
+   never fetched, the last attempt failed, or not since the latest 13:00
+   Location Time (never within 15 minutes of a failure, and one fetch in
+   flight at a time). The last good document is kept in
    `cache/organization.json`; a bad or unreachable one never replaces it.
    Its times become the Own Prayer Time of the prayers it covers
    (`schedule::own_prayer_time`), never the window.

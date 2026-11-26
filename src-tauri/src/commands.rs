@@ -199,9 +199,7 @@ async fn download_feed(
     shared: &State<'_, SharedEngine>,
     link: OrganizationLink,
 ) -> Result<(String, organization::OrganizationFeed), String> {
-    let tz = with_engine(shared, |engine| {
-        engine.settings.location.as_ref().map(|l| l.timezone.clone())
-    })
+    let tz = with_engine(shared, |engine| engine.location_tz().map(str::to_string))
     .ok_or_else(|| "Set your location first".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let body = organization::fetch(&http_client()?, &link).map_err(|e| e.to_string())?;

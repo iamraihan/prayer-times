@@ -60,7 +60,7 @@ _Avoid_: Mosque (in code), group, community, membership
 
 **Organization Feed**:
 The small JSON document an Organization publishes at a link: its name, timezone and the time of 1 to 5 prayers. Fetched when the user follows or saves, then once a day at 13:00 Location Time (polling, not a webhook). See `docs/organization-feed.md`.
-_Avoid_: API (too broad), webhook
+_Avoid_: API (in code and docs; the UI field is labelled "API link" because that is what organizations call it), webhook
 
 **Followed Prayer**:
 A prayer the followed Organization's feed covers. Its Own Prayer Time is the Organization's time and the user can't change it. The Prayer Window, and so the Before-End Warning, still come from the Timetable. Prayers the feed doesn't cover keep the user's own setting.

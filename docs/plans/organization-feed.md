@@ -28,8 +28,8 @@ Four modules, each deep: a small interface over most of the feature's rules.
 | Module | Interface | What it hides |
 |---|---|---|
 | `organization::parse_feed` (new file `src-tauri/src/organization.rs`) | `parse_feed(json: &str, location_tz: &str) -> Result<OrganizationFeed, FeedError>` | JSON shape, `HH:MM` parsing, unknown-prayer hints (`zuhr` → `dhuhr`), timezone check, "at least one prayer" |
-| `organization::fetch` | `fetch(client, link: &OrganizationLink, etag: Option<&str>) -> Result<FetchOutcome, FetchError>`, where `FetchOutcome = NotModified \| Fresh { body, etag }` | https-only check, `Authorization: Bearer`, `If-None-Match`, `304`, `401`/`403` → `FetchError::AccessKeyRejected`, 1 MiB cap, timeout |
-| `organization::OrganizationState` | `refresh_due(now) -> bool`, `record(result, location_tz, now)`, `prayers() -> Option<&OrganizationPrayers>`, `status() -> OrganizationStatusDto`; serde for `cache/organization.json` | Refresh cadence (24 h after success, 15 min retry after failure), keep last good feed, which warning to show and when (unreachable for over 24 h, rejected document, access key rejected) |
+| `organization::fetch` | `fetch(client, link: &OrganizationLink) -> Result<String, FetchError>` | https-only check (also after redirects), `Authorization: Bearer`, `401`/`403` → `FetchError::AccessKeyRejected`, `404` → `NotFound`, 1 MiB cap, timeout |
+| `organization::OrganizationState` | `refresh_due(now) -> bool`, `record(result, location_tz, now)`, `prayers() -> Option<&OrganizationPrayers>`, `status() -> OrganizationStatusDto`; serde for `cache/organization.json` | Refresh cadence (daily at 13:00 Location Time via `schedule::organization_refresh_due`, 15 min retry after any failure), keep last good feed, which warning to show and when (unreachable for over 24 h, rejected document, access key rejected) |
 | `schedule::own_prayer_time` | `own_prayer_time(prayer, start, end, date, tz, after: Option<u32>, organization: Option<&OrganizationPrayers>) -> OwnPrayerTime { at, source }`, with `source: OwnTimeSource = User \| Organization \| OrganizationIgnored` | Organization override vs `pray_time` offset, the out-of-window and last-5-minutes rule (ignore, don't clamp), DST gap and overlap, Isha congregation after 00:00 |
 
 `PrayerWindow` gains `pray_at` and `source`, and `schedule::windows` / `compute` take `organization: Option<&OrganizationPrayers>`. Both callers that compute an Own Prayer Time today (`schedule.rs:167` and the snooze path at `engine.rs:786`) then read `w.pray_at`, so one function decides it.
@@ -42,8 +42,8 @@ The engine stays thin. It holds an `OrganizationState`, plans one fetch job unde
 |---|---|---|---|
 | S1 | `parse_feed` | Typos, wrong timezone, bad times, empty feed, unknown fields outside `prayers` ignored | Network and HTTP behaviour |
 | S2 | `own_prayer_time` plus one `compute` test | Locking, partial coverage, leaving restores `prayAfterMinutes`, out-of-window ignored, DST, Isha after 00:00, the Main Alarm and Get-Ready Alarm moving | Whether the engine passes the right feed in |
-| S3 | `OrganizationState` | Cadence, keep-last-good, warnings, `NotModified` refreshing the timestamp, a feed for another timezone after the Location changed | The real HTTP client |
-| S4 | `fetch` against an in-process `std::net::TcpListener` (offline, runs in CI) | Header sent, `If-None-Match`, `304`, `401`, oversize body, `http://` refused | TLS and real hosts: one `#[ignore = "network"]` test covers that |
+| S3 | `OrganizationState` | Cadence, keep-last-good, warnings, a feed for another timezone after the Location changed | The real HTTP client |
+| S4 | `fetch` against an in-process `std::net::TcpListener` (offline, runs in CI) | Header sent, `401`/`403`/`404`/`500`, oversize body, `http://` refused | TLS and real hosts: one `#[ignore = "network"]` test covers that |
 
 No tests on the engine or commands (they need an `AppHandle`), and none on the frontend beyond `tsc`. Their logic stays in S1–S4.
 
@@ -86,15 +86,15 @@ Then switch `windows`, `compute` and the snooze path (`engine.rs:786`) to `w.pra
 ### Slice 3: refresh and failure policy (S3)
 
 1. Never fetched → `refresh_due` is true.
-2. Success at T → not due at T + 23 h, due at T + 24 h.
+2. Success at 10:00 → not due at 12:59, due at 13:00; success at 13:05 → not due until 13:00 the next day. A missed 13:00 is caught up at the next launch.
 3. Failure → not due for 15 min, due after that.
 4. `Fresh` with a valid body → `prayers()` returns it, status warning cleared.
 5. `Fresh` with an invalid body → previous `prayers()` kept, warning names the error.
 6. Unreachable for under 24 h → no warning. Over 24 h → "Couldn't update <name>".
 7. `AccessKeyRejected` → previous prayers kept, warning "access key rejected".
-8. `NotModified` → last-success time updated, prayers unchanged.
+8. A failure after today's success (a manual Refresh) is retried after 15 minutes too.
 9. Stored feed's timezone no longer matches the Location → `prayers()` is `None` and a warning shows.
-10. A round trip through serde (the `cache/organization.json` shape) keeps the feed, `ETag` and timestamps.
+10. A round trip through serde (the `cache/organization.json` shape) keeps the feed and timestamps.
 
 ### Slice 4: HTTP (S4)
 
@@ -103,7 +103,7 @@ A test helper spins up a `TcpListener` on `127.0.0.1:0`, answers one canned resp
 
 Tests:
 1. Bearer header sent when there is an access key, absent without one.
-2. `If-None-Match` sent when there is an `ETag`. A `304` → `NotModified`.
+2. No `Authorization` header without an access key.
 3. `401` → `AccessKeyRejected`. `500` → `Unreachable`.
 4. Body over 1 MiB → `TooLarge`.
 5. `http://example.org` → `InsecureUrl` without sending a request.
@@ -145,12 +145,13 @@ Tests:
   - **Followed Prayer**: a prayer the feed covers, whose Own Prayer Time is locked.
   - Update **Own Prayer Time** to say it can come from an Organization.
 - `docs/adr/0002-organization-feed-polling-and-jamaat-only.md`: polling, not webhooks. The feed sets the Own Prayer Time only, not window starts. Times outside the window are ignored, not clamped.
-- `docs/organization-feed.md`: a one-page guide for Organizations. The format, the prayer key spellings, hosting a static file (GitHub Pages, own site), `ETag`, and what the access key does and doesn't protect.
+- `docs/organization-feed.md`: a one-page guide for Organizations. The format, the prayer key spellings, hosting a static file (GitHub Pages, own site), and what the access key does and doesn't protect.
 - `ARCHITECTURE.md`: the Organization fetch job next to the month jobs.
 
 ## Done when
 
-- [ ] `cargo test` and `pnpm build` pass. `cargo test -- --ignored` passes for the new network test.
-- [ ] `src/lib/bindings/` has no uncommitted diff.
-- [ ] Manual check from slice 6 done.
-- [ ] Done marks survive following, leaving and refreshing (manual check: mark Fajr done, follow, leave).
+- [x] `cargo test` and `pnpm build` pass.
+- [ ] `cargo test -- --ignored` passes for the new network test (needs `docs/examples/` on `main`).
+- [x] `src/lib/bindings/` has no uncommitted diff (after committing).
+- [x] Manual check from slice 6 done (isolated config, real and faked clocks: follow, locks, leave, 13:00 refetch, Get-Ready and Main Alarm at the Organization's time).
+- [x] Done marks survive following, leaving and refreshing (manual check: mark Fajr done, follow, leave).

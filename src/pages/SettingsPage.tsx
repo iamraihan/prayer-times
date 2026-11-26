@@ -272,7 +272,6 @@ export function SettingsPage() {
         link={settings.organization}
         status={state?.organization ?? null}
         hasLocation={location !== null}
-        today={state?.today?.date}
         mode={draft.timeFormat}
       />
 
@@ -321,20 +320,29 @@ export function SettingsPage() {
       >
         {PRAYERS.map((p) => {
           const ps = draft.prayerSettings[p];
-          // Set by the followed Organization: shown, not editable.
+          // A Followed Prayer: the Organization's time, not editable.
           const org = state?.organization;
-          const locked = org?.prayers.find((x) => x.prayer === p);
-          if (locked) {
+          const followedTime = org?.times[p] ?? null;
+          if (followedTime !== null) {
+            const ignoredToday =
+              state?.today?.timings.find((t) => t.prayer === p)?.ownTimeSource === "organizationIgnored";
+            const name = org?.name ?? "your organization";
             return (
               <SettingRow
                 key={p}
                 label={PRAYER_LABELS[p]}
-                hint={`Set by ${org?.name ?? "your organization"}`}
+                hint={
+                  ignoredToday
+                    ? `Set by ${name}, but outside today's prayer time, so today you pray ${
+                        ps.prayAfterMinutes ? `${ps.prayAfterMinutes} min after the start` : "at the start"
+                      }`
+                    : `Set by ${name}`
+                }
               >
                 <span className="tnum flex items-center gap-1.5 text-sm font-medium text-emerald-200">
                   <Lock className="h-3.5 w-3.5 text-emerald-400/80" aria-hidden />
-                  {fmtHM(locked.time, draft.timeFormat)}
-                  <span className="sr-only">(locked)</span>
+                  {fmtHM(followedTime, draft.timeFormat)}
+                  <span className="sr-only">(set by {name})</span>
                 </span>
               </SettingRow>
             );

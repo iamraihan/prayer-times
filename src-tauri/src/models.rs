@@ -279,7 +279,7 @@ pub struct Settings {
 pub enum OwnTimeSource {
     /// The user's own setting ("at the start" or "N min after").
     User,
-    /// The followed Organization's time (locked).
+    /// The followed Organization's time (a Followed Prayer: the user can't change it).
     Organization,
     /// The Organization covers this prayer, but its time falls outside the
     /// Prayer Window (or in its last 5 minutes) today, so the user's own
@@ -609,7 +609,7 @@ pub struct PrayerTimeDto {
     /// The Own Prayer Time as an RFC3339 instant (None if the window is
     /// unresolvable).
     pub pray_at: Option<String>,
-    /// Where `pray_at` comes from; `organization` = locked.
+    /// Where `pray_at` comes from; `organization` = a Followed Prayer.
     pub own_time_source: OwnTimeSource,
 }
 
@@ -684,14 +684,41 @@ pub struct AppStateDto {
     pub organization: Option<OrganizationStatusDto>,
 }
 
-/// One prayer an Organization Feed covers, with its time ("HH:MM",
-/// Location Time).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// The time ("HH:MM", Location Time) an Organization Feed gives each
+/// prayer; `None` = not covered, the user's own setting applies.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(TS), ts(export))]
-pub struct OrganizationPrayerDto {
-    pub prayer: Prayer,
-    pub time: String,
+pub struct OrganizationTimesDto {
+    pub fajr: Option<String>,
+    pub dhuhr: Option<String>,
+    pub asr: Option<String>,
+    pub maghrib: Option<String>,
+    pub isha: Option<String>,
+}
+
+impl OrganizationTimesDto {
+    pub fn get(&self, prayer: Prayer) -> Option<&str> {
+        match prayer {
+            Prayer::Fajr => self.fajr.as_deref(),
+            Prayer::Dhuhr => self.dhuhr.as_deref(),
+            Prayer::Asr => self.asr.as_deref(),
+            Prayer::Maghrib => self.maghrib.as_deref(),
+            Prayer::Isha => self.isha.as_deref(),
+        }
+    }
+}
+
+/// Which calendar day (Location Time) an instant fell on, relative to now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub enum RelativeDay {
+    Today,
+    Yesterday,
+    Earlier,
+    /// After today (a clock that moved back).
+    Later,
 }
 
 /// What the user confirms before following an Organization.
@@ -705,8 +732,8 @@ pub struct OrganizationPreviewDto {
     pub timezone: String,
     /// The feed's `updatedAt`, as published (RFC3339).
     pub updated_at: Option<String>,
-    /// Covered prayers in prayer order; the others stay the user's.
-    pub prayers: Vec<OrganizationPrayerDto>,
+    /// The covered prayers' times; the others stay the user's.
+    pub times: OrganizationTimesDto,
 }
 
 /// The followed Organization, for the Settings page and the prayer list.
@@ -718,13 +745,17 @@ pub struct OrganizationStatusDto {
     pub host: String,
     /// `None` until the feed has been fetched once.
     pub name: Option<String>,
-    /// Covered prayers of the last good feed (empty when none, or when it
-    /// is for another timezone).
-    pub prayers: Vec<OrganizationPrayerDto>,
+    /// The last good feed's times (all `None` when there is none, or when
+    /// it is for another timezone).
+    pub times: OrganizationTimesDto,
     /// The feed's `updatedAt`, as published (RFC3339).
     pub updated_at: Option<String>,
     /// The last successful fetch (RFC3339, Location offset).
     pub last_fetched_at: Option<String>,
+    /// The calendar day of `last_fetched_at`, relative to today.
+    pub last_fetched_day: Option<RelativeDay>,
+    /// When the daily check runs ("HH:MM", Location Time).
+    pub daily_check: String,
     pub warning: Option<String>,
 }
 

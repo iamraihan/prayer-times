@@ -22,12 +22,17 @@ pub struct BackupFile {
     pub history: Vec<HistoryEntry>,
 }
 
+/// The followed Organization is left out: an import keeps the device's own
+/// (`settings_to_apply`), and its access key shouldn't travel in a file.
 pub fn to_json(settings: &Settings, history: Vec<HistoryEntry>, now: DateTime<Utc>) -> String {
     let file = BackupFile {
         format: FORMAT.into(),
         version: VERSION,
         exported_at: now.to_rfc3339(),
-        settings: settings.clone(),
+        settings: Settings {
+            organization: None,
+            ..settings.clone()
+        },
         history,
     };
     serde_json::to_string_pretty(&file).unwrap_or_default()
@@ -175,5 +180,19 @@ mod tests {
         assert_eq!(settings_to_apply(&current, incoming.clone()).organization, current.organization);
         current.organization = None;
         assert_eq!(settings_to_apply(&current, incoming).organization, None);
+    }
+
+    #[test]
+    fn backups_leave_out_the_followed_organization() {
+        // An import never applies it (see above), and its access key
+        // shouldn't travel in a file the user may share.
+        let mut s = Settings::default();
+        s.organization = Some(crate::models::OrganizationLink {
+            feed_url: "https://here.example/feed.json".into(),
+            access_key: Some("k-123".into()),
+        });
+        let json = to_json(&s, Vec::new(), chrono::Utc::now());
+        assert!(!json.contains("k-123"), "{json}");
+        assert!(!json.contains("here.example"), "{json}");
     }
 }

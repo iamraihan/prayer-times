@@ -40,6 +40,9 @@ use crate::tour::{self, TourStore};
 use crate::{alarm, runtime, settings as settings_io, timeutil, tray};
 
 pub const TICK_SECONDS: u64 = 15;
+/// An Organization fetch older than this is treated as lost (the HTTP
+/// client times out after 20 s), so a new one may start.
+const ORGANIZATION_FETCH_TIMEOUT: StdDuration = StdDuration::from_secs(60);
 /// Sound + popup auto-stop when nobody answers.
 const ALARM_AUTO_STOP_SECS: i64 = 2 * 60;
 /// Minimum wait between retries of a failed month fetch.
@@ -133,6 +136,8 @@ pub struct Engine {
     /// The followed Organization's last good feed and fetch history
     /// (meaningful only while `settings.organization` is set).
     organization: OrganizationState,
+    /// When the Organization fetch now in flight started (one at a time).
+    organization_fetch_started: Option<Instant>,
 
     day: Option<NaiveDate>,
     fired: HashSet<String>,
@@ -224,6 +229,7 @@ impl Engine {
             months: HashMap::new(),
             fetch_attempts: HashMap::new(),
             organization,
+            organization_fetch_started: None,
             day: rt.day,
             fired: rt.fired.into_iter().collect(),
             last_tick: None,
@@ -581,8 +587,7 @@ impl Engine {
     /// Tray "✓ Mark done" targets the prayer whose window is open, or the
     /// next upcoming one.
     pub fn next_or_current_prayer(&mut self) -> Option<Prayer> {
-        let tz_name = self.settings.location.as_ref()?.timezone.clone();
-        let tz = timeutil::parse_tz(&tz_name)?;
+        let tz = timeutil::parse_tz(self.location_tz()?)?;
         let now = Utc::now().with_timezone(&tz);
         self.compute_next(now, tz).map(|n| n.prayer)
     }
@@ -618,7 +623,7 @@ impl Engine {
         }
 
         let organization = settings.organization.as_ref().and_then(|link| {
-            let tz = timeutil::parse_tz(&settings.location.as_ref()?.timezone)?;
+            let tz = timeutil::parse_tz(self.location_tz()?)?;
             Some(organization::status_dto(link, &self.organization, Utc::now().with_timezone(&tz)))
         });
 
@@ -651,27 +656,37 @@ impl Engine {
 
     // -- Organization ----------------------------------------------------
 
+    /// The Location's IANA timezone name, if a location is set.
+    pub fn location_tz(&self) -> Option<&str> {
+        self.settings.location.as_ref().map(|l| l.timezone.as_str())
+    }
+
     /// The followed Organization's times, when they apply to the Location.
     fn organization_prayers(&self) -> Option<&OrganizationPrayers> {
-        let tz = self.settings.location.as_ref()?.timezone.as_str();
         self.settings.organization.as_ref()?;
-        self.organization.prayers(tz)
+        self.organization.prayers(self.location_tz()?)
     }
 
     /// Starts following `link`, whose document `body` has already been
     /// downloaded and checked. Done marks, fired alarms and snoozes are kept:
     /// they belong to the Prayer Day, not to where its times come from.
+    /// Refused when the document doesn't fit the current Location (the
+    /// location changed while it was being downloaded).
     pub fn follow_organization(&mut self, link: OrganizationLink, body: String) -> Result<(), String> {
         let tz = self
-            .settings
-            .location
-            .as_ref()
-            .map(|l| l.timezone.clone())
-            .ok_or_else(|| "Set your location first".to_string())?;
+            .location_tz()
+            .ok_or_else(|| "Set your location first".to_string())?
+            .to_string();
         let mut state = OrganizationState::for_feed(&link.feed_url);
         state.record(Ok(body), &tz, Utc::now());
+        if state.prayers(&tz).is_none() {
+            return Err(state
+                .warning(Utc::now().with_timezone(&timeutil::parse_tz(&tz).unwrap_or(Tz::UTC)))
+                .unwrap_or_else(|| "The feed can't be used for your location".to_string()));
+        }
         organization::save(&self.cache_dir, &state);
         self.organization = state;
+        self.organization_fetch_started = None;
         self.settings.organization = Some(link);
         self.dirty = true;
         settings_io::save(&self.app, &self.settings)
@@ -680,30 +695,38 @@ impl Engine {
     pub fn leave_organization(&mut self) -> Result<(), String> {
         self.settings.organization = None;
         self.organization = OrganizationState::default();
+        self.organization_fetch_started = None;
         organization::remove(&self.cache_dir);
         self.dirty = true;
         settings_io::save(&self.app, &self.settings)
     }
 
     /// A fetch job when the followed feed is due (or `force`d by "Refresh
-    /// now").
-    pub fn plan_organization_fetch(&self, force: bool) -> Option<OrganizationJob> {
+    /// now"), unless one is already in flight.
+    pub fn plan_organization_fetch(&mut self, force: bool) -> Option<OrganizationJob> {
         let link = self.settings.organization.clone()?;
-        let tz = timeutil::parse_tz(&self.settings.location.as_ref()?.timezone)?;
-        (force || self.organization.refresh_due(Utc::now().with_timezone(&tz))).then(|| OrganizationJob {
+        let tz = timeutil::parse_tz(self.location_tz()?)?;
+        let in_flight = self
+            .organization_fetch_started
+            .is_some_and(|t| t.elapsed() < ORGANIZATION_FETCH_TIMEOUT);
+        if in_flight || !(force || self.organization.refresh_due(Utc::now().with_timezone(&tz))) {
+            return None;
+        }
+        self.organization_fetch_started = Some(Instant::now());
+        Some(OrganizationJob {
             client: self.client.clone(),
             link,
         })
     }
 
-    /// Records a finished fetch, unless the user followed another feed or
-    /// left in the meantime.
+    /// Records a finished fetch, unless the user followed another feed,
+    /// changed the access key, or left in the meantime.
     pub fn store_organization(&mut self, job: &OrganizationJob, result: Result<String, organization::FetchError>) {
-        let current = self.settings.organization.as_ref();
-        if current.map(|l| &l.feed_url) != Some(&job.link.feed_url) {
+        self.organization_fetch_started = None;
+        if self.settings.organization.as_ref() != Some(&job.link) {
             return;
         }
-        let Some(tz) = self.settings.location.as_ref().map(|l| l.timezone.clone()) else {
+        let Some(tz) = self.location_tz().map(str::to_string) else {
             return;
         };
         self.organization.record(result, &tz, Utc::now());
@@ -1317,14 +1340,9 @@ pub fn day_timings_dto(
             .filter_map(|prayer| {
                 day.times.get(prayer).map(|&start| {
                     let window = tz.and_then(|tz| schedule::window(*prayer, day, tz));
-                    let own_time = window.map(|(s, e)| {
-                        let (after, org) = own.map_or((None, None), |(settings, org)| {
-                            (
-                                settings.prayer_settings.get(*prayer).pray_after_minutes,
-                                org.and_then(|o| o.get(*prayer)),
-                            )
-                        });
-                        schedule::own_prayer_time(s, e, after, org)
+                    let own_time = window.map(|(s, e)| match own {
+                        Some((settings, org)) => schedule::own_prayer_time_for(*prayer, s, e, settings, org),
+                        None => schedule::own_prayer_time(s, e, None, None),
                     });
                     PrayerTimeDto {
                         prayer: *prayer,

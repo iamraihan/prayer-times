@@ -1,6 +1,6 @@
 # Organizations are polled once a day and set only the Own Prayer Time
 
-A user can follow an **Organization** (a masjid) by pasting the link to its **Organization Feed**. Three choices here look odd at first glance.
+A user can follow an **Organization** (a masjid or any other group) by pasting the link to its **Organization Feed**. Three choices here look odd at first glance.
 
 **Polling, not a webhook.** With a webhook, the Organization's server would call the app when its times change. A desktop app has no public address to call, so the app asks instead: when the user follows or saves, then once a day at 13:00 Location Time (or at the first tick after it, if the app wasn't running), with a 15-minute retry after a failure. Jamaat times change a few times a year, so a day's delay is fine, and one small request per member per day costs the Organization nothing. We dropped `ETag` / `304` for the same reason: it saves nothing worth the extra state.
 
@@ -19,4 +19,4 @@ A user can follow an **Organization** (a masjid) by pasting the link to its **Or
 - When the feed can't be fetched or a new document is invalid, the last good document (`cache/organization.json`) keeps applying. An unreachable feed only shows a warning after a day; a rejected document or Access Key shows one at once.
 - A feed whose `timezone` isn't the Location's is refused, and a stored one stops applying after the user moves.
 - Following, leaving and refreshing never call `reset_schedule`: Done marks, fired alarms and Snoozes belong to the Prayer Day.
-- A restored backup keeps this device's Organization, as it keeps the location.
+- Backups leave the Organization out (its Access Key shouldn't travel in a file), and a restored backup keeps this device's Organization, as it keeps the location.
