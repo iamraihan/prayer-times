@@ -243,7 +243,7 @@ pub enum FetchError {
 impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FetchError::InsecureUrl => write!(f, "The feed link must start with https://."),
+            FetchError::InsecureUrl => write!(f, "The API link must start with https://."),
             FetchError::Unreachable(detail) => write!(f, "Couldn't reach the feed ({detail})."),
             FetchError::AccessKeyRejected => write!(f, "The feed rejected the access key."),
             FetchError::NotFound => write!(f, "No feed was found at that link."),
