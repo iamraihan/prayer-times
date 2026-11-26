@@ -22,6 +22,7 @@ mod engine;
 mod geocode;
 mod history;
 mod models;
+mod organization;
 mod runtime;
 mod schedule;
 mod settings;
@@ -103,6 +104,10 @@ pub fn run() {
             commands::preview_location,
             commands::save_location,
             commands::update_settings,
+            commands::preview_organization,
+            commands::follow_organization,
+            commands::leave_organization,
+            commands::refresh_organization,
             commands::set_prayer_done,
             commands::get_history_month,
             commands::set_history_entry,

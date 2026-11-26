@@ -18,6 +18,7 @@ import type {
   CityMatch,
   Location,
   LocationPreview,
+  OrganizationPreview,
   Prayer,
   PreviewRequest,
   Settings,
@@ -35,6 +36,10 @@ interface Commands {
   preview_location: [{ req: PreviewRequest }, LocationPreview];
   save_location: [{ location: Location; method: number; school: AsrSchool }, AppState];
   update_settings: [{ settings: Settings }, AppState];
+  preview_organization: [{ feedUrl: string; accessKey: string | null }, OrganizationPreview];
+  follow_organization: [{ feedUrl: string; accessKey: string | null }, AppState];
+  leave_organization: [NoArgs, AppState];
+  refresh_organization: [NoArgs, AppState];
   set_prayer_done: [{ prayer: Prayer; done: boolean }, AppState];
   get_history_month: [{ year: number; month: number }, HistoryMonth];
   set_history_entry: [{ day: string; prayer: Prayer; status: HistoryStatus | null }, HistoryMonth];
@@ -74,6 +79,17 @@ export const api = {
     call("save_location", { location, method, school }),
 
   updateSettings: (settings: Settings) => call("update_settings", { settings }),
+
+  previewOrganization: (feedUrl: string, accessKey: string | null) =>
+    call("preview_organization", { feedUrl, accessKey }),
+
+  /** Follows, or saves a changed link/key; fetches the feed again either way. */
+  followOrganization: (feedUrl: string, accessKey: string | null) =>
+    call("follow_organization", { feedUrl, accessKey }),
+
+  leaveOrganization: () => call("leave_organization", none),
+
+  refreshOrganization: () => call("refresh_organization", none),
 
   setPrayerDone: (prayer: Prayer, done: boolean) => call("set_prayer_done", { prayer, done }),
 

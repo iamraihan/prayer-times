@@ -1,0 +1,12 @@
+{
+  "name": "Example Masjid (all five prayers)",
+  "timezone": "Asia/Dhaka",
+  "updatedAt": "2026-11-26T10:00:00+06:00",
+  "prayers": {
+    "fajr": "05:30",
+    "dhuhr": "13:15",
+    "asr": "16:30",
+    "maghrib": "17:25",
+    "isha": "19:45"
+  }
+}

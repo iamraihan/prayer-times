@@ -23,12 +23,14 @@ scheduling, so alarms fire even when the windows are hidden.
 │  engine.rs  run_loop thread ───────────────┘                 │   │
 │    every 15s (or woken):                                     │   │
 │      plan_fetches → fetch month(s) OUTSIDE the lock           │   │
+│      plan_organization_fetch → fetch feed OUTSIDE the lock    │   │
 │      tick(): compute events → fire due ones ──────────── sound.rs     │
 │                update tray ────────────────────────────► tray.rs ──┘  │
 │                emit "app-state" snapshot                       │      │
 │                                                               │      │
 │  schedule.rs  pure: DayTimings + Settings → [PlannedEvent]     │      │
 │  aladhan.rs   API client + month disk cache                    │      │
+│  organization.rs  Organization Feed: fetch, parse, refresh rules│      │
 │  geocode.rs   city search (Open-Meteo) for the location picker │      │
 │  tzcountry.rs timezone → countries (vendored tzdb tables)       │      │
 │  alarm.rs     notification + always-on-top popup window        │      │
@@ -49,10 +51,17 @@ scheduling, so alarms fire even when the windows are hidden.
    memory → disk cache → network (throttled to one retry/minute). Months
    are cached per `(location, method, school, year, month)`; a fetch that
    finishes after the location changed is dropped.
-3. **Every tick (15 s)** — `schedule::compute` derives the day's events;
+3. **Organization Feed** — while the user follows an Organization,
+   `plan_organization_fetch` asks `OrganizationState::refresh_due`: never
+   fetched, or not since the latest 13:00 Location Time (15-minute retry
+   after a failure). The last good document is kept in
+   `cache/organization.json`; a bad or unreachable one never replaces it.
+   Its times become the Own Prayer Time of the prayers it covers
+   (`schedule::own_prayer_time`), never the window.
+4. **Every tick (15 s)** — `schedule::compute` derives the day's events;
    due events (within a 10-minute grace for missed ones) fire; the tray and
    both windows get a fresh snapshot.
-4. **User actions** — invoke a command → engine mutates under a short lock
+5. **User actions** — invoke a command → engine mutates under a short lock
    → the command returns the new snapshot → the store applies it
    immediately (no waiting for the next tick).
 
@@ -143,13 +152,19 @@ Rules of thumb:
   can silently match a place elsewhere — so it is rejected when the matched
   timezone isn't used in the chosen country (`tzcountry.rs`), and a saved one
   shows a warning.
+- **Organizations are polled, and set only the Own Prayer Time** — see
+  [ADR 0002](docs/adr/0002-organization-feed.md). The followed Organization
+  lives in `Settings.organization` but only its own commands change it
+  (`apply_settings` keeps it, like the alarm tone), and following or
+  leaving never resets the schedule: Done marks stay.
 - **Month-granularity caching** keeps the app fully offline for the current
   month and costs one request per month online.
 - **Timetable fetches happen only on the engine thread, outside the state
   lock**, so state-mutating IPC commands never block on the network. A few
   read-only commands do their own request on a blocking task, never holding
-  the lock: city search and the wizard preview, and `open_guide`'s check that
-  YouTube is reachable.
+  the lock: city search and the wizard preview, `open_guide`'s check that
+  YouTube is reachable, and the Organization commands (preview, follow,
+  refresh), which download the feed before taking the lock.
 - **Video guide window** (`windows.rs`, label `guide`): opened from the header
   or Settings, it shows the tutorial's YouTube watch page trimmed to the
   player. Not the `/embed/` player, which refuses to play from

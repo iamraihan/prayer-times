@@ -50,12 +50,14 @@ pub fn parse(text: &str) -> Result<BackupFile, String> {
 
 /// The settings an import applies: the backup's, except that this device
 /// keeps its location when the backup has none, and always keeps its own
-/// alarm tone (the tone file isn't in backups).
+/// alarm tone (the tone file isn't in backups) and its own followed
+/// Organization (whose feed is tied to this device's Location).
 pub fn settings_to_apply(current: &Settings, mut incoming: Settings) -> Settings {
     if incoming.location.is_none() {
         incoming.location = current.location.clone();
     }
     incoming.alarm_sound = current.alarm_sound.clone();
+    incoming.organization = current.organization.clone();
     incoming
 }
 
@@ -157,5 +159,21 @@ mod tests {
         assert_eq!(p.last_day.as_deref(), Some("2026-11-08"));
         assert_eq!(p.location.as_deref(), Some("Dhaka"));
         assert!(p.has_custom_tone);
+    }
+
+    #[test]
+    fn an_import_keeps_this_devices_organization() {
+        // The feed is tied to this device's Location, like the location itself.
+        let link = |url: &str| crate::models::OrganizationLink {
+            feed_url: url.to_string(),
+            access_key: None,
+        };
+        let mut current = Settings::default();
+        current.organization = Some(link("https://here.example/feed.json"));
+        let mut incoming = Settings::default();
+        incoming.organization = Some(link("https://there.example/feed.json"));
+        assert_eq!(settings_to_apply(&current, incoming.clone()).organization, current.organization);
+        current.organization = None;
+        assert_eq!(settings_to_apply(&current, incoming).organization, None);
     }
 }

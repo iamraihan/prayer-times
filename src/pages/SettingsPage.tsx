@@ -20,6 +20,7 @@ import { Toggle } from "../components/ui/Toggle";
 import { Select, SliderField, UnitInput } from "../components/ui/fields";
 import { SetupWizard } from "../components/SetupWizard";
 import { BackupControls } from "../components/BackupControls";
+import { OrganizationSettings } from "../components/OrganizationSettings";
 import { useAppState } from "../store/useAppStore";
 import { IS_MAC, useUpdateStore } from "../store/useUpdateStore";
 import {
@@ -35,7 +36,7 @@ import {
 import { METHODS } from "../lib/methods";
 import { PRAYERS, PRAYER_LABELS, type Prayer, type Settings } from "../lib/types";
 import { cn } from "../lib/cn";
-import { fmtHourMinute, parseHM } from "../lib/time";
+import { fmtHM, fmtHourMinute, parseHM } from "../lib/time";
 import { friendlyError } from "../lib/errors";
 import { useGuide } from "../lib/useGuide";
 import { forgetShownTours } from "../lib/useTour";
@@ -266,6 +267,13 @@ export function SettingsPage() {
         )}
       </Section>
 
+      <OrganizationSettings
+        link={settings.organization}
+        status={state?.organization ?? null}
+        hasLocation={location !== null}
+        mode={draft.timeFormat}
+      />
+
       <Section title="Calculation" description="Changing these refetches the timetable.">
         <SettingRow label="Calculation method" hint="Sets the sun angles used for Fajr and Isha">
           <Select
@@ -311,19 +319,27 @@ export function SettingsPage() {
       >
         {PRAYERS.map((p) => {
           const ps = draft.prayerSettings[p];
+          // Set by the followed Organization: shown, not editable.
+          const org = state?.organization;
+          const locked = org?.prayers.find((x) => x.prayer === p);
+          const hint = locked
+            ? `Set by ${org?.name ?? "your organization"}: jamaat ${fmtHM(locked.time, draft.timeFormat)}`
+            : ps.enabled
+              ? prayHint(p)
+              : "Alarms off for this prayer";
           return (
             <SettingRow
               key={p}
               label={PRAYER_LABELS[p]}
-              hint={ps.enabled ? prayHint(p) : "Alarms off for this prayer"}
-              disabled={!ps.enabled}
+              hint={hint}
+              disabled={!ps.enabled || locked !== undefined}
             >
               <MinutesInput
                 min={0}
                 max={600}
                 allowEmpty
                 placeholder="0"
-                disabled={!ps.enabled}
+                disabled={!ps.enabled || locked !== undefined}
                 value={ps.prayAfterMinutes}
                 onCommit={(v) => patchPrayer(p, { prayAfterMinutes: v === 0 ? null : v }, 600)}
                 aria-label={`Minutes after ${PRAYER_LABELS[p]} starts that you pray`}
@@ -647,6 +663,7 @@ const SETTINGS_FIELDS: { [K in keyof Settings]-?: true } = {
   preEndWarningEnabled: true,
   preEndWarningMinutes: true,
   prayerSettings: true,
+  organization: true,
 };
 const SETTINGS_KEYS = Object.keys(SETTINGS_FIELDS) as (keyof Settings)[];
 
@@ -656,6 +673,8 @@ function rebase(draft: Settings, prev: Settings, next: Settings): Settings {
   for (const key of SETTINGS_KEYS) keepEdit(out, draft, prev, key);
   // The tone is always backend-owned (applied instantly, never via Save).
   out.alarmSound = next.alarmSound;
+  // So is the followed Organization (changed only by its own commands).
+  out.organization = next.organization;
   return out;
 }
 

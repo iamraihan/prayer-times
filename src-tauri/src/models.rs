@@ -267,6 +267,37 @@ pub struct Settings {
     pub pre_end_warning_enabled: bool,
     pub pre_end_warning_minutes: u32,
     pub prayer_settings: PrayerSettingsMap,
+    /// The Organization the user follows; `None` = not following one.
+    /// Changed only by the Organization commands, never by a Settings draft.
+    pub organization: Option<OrganizationLink>,
+}
+
+/// Where a prayer's Own Prayer Time comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub enum OwnTimeSource {
+    /// The user's own setting ("at the start" or "N min after").
+    User,
+    /// The followed Organization's time (locked).
+    Organization,
+    /// The Organization covers this prayer, but its time falls outside the
+    /// Prayer Window (or in its last 5 minutes) today, so the user's own
+    /// setting applies.
+    OrganizationIgnored,
+}
+
+/// Where to fetch a followed Organization's Organization Feed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct OrganizationLink {
+    /// An `https://` URL.
+    pub feed_url: String,
+    /// Sent as `Authorization: Bearer <key>` when set. Shared by every
+    /// member, so it limits use; it doesn't keep the times secret.
+    #[serde(default)]
+    pub access_key: Option<String>,
 }
 
 impl Default for Settings {
@@ -287,6 +318,7 @@ impl Default for Settings {
             pre_end_warning_enabled: true,
             pre_end_warning_minutes: 10,
             prayer_settings: PrayerSettingsMap::default(),
+            organization: None,
         }
     }
 }
@@ -574,6 +606,11 @@ pub struct PrayerTimeDto {
     pub start_at: Option<String>,
     /// Window end as an RFC3339 instant; may be on the next calendar day.
     pub ends_at: Option<String>,
+    /// The Own Prayer Time as an RFC3339 instant (None if the window is
+    /// unresolvable).
+    pub pray_at: Option<String>,
+    /// Where `pray_at` comes from; `organization` = locked.
+    pub own_time_source: OwnTimeSource,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -643,6 +680,52 @@ pub struct AppStateDto {
     /// Tour Steps the user has seen; `None` when `app.db` can't be read,
     /// in which case the UI shows no Tours.
     pub seen_tour_steps: Option<Vec<TourStep>>,
+    /// The followed Organization; `None` when not following one.
+    pub organization: Option<OrganizationStatusDto>,
+}
+
+/// One prayer an Organization Feed covers, with its time ("HH:MM",
+/// Location Time).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct OrganizationPrayerDto {
+    pub prayer: Prayer,
+    pub time: String,
+}
+
+/// What the user confirms before following an Organization.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct OrganizationPreviewDto {
+    pub name: String,
+    /// The feed's host name (e.g. "baitulaman.example").
+    pub host: String,
+    pub timezone: String,
+    /// The feed's `updatedAt`, as published (RFC3339).
+    pub updated_at: Option<String>,
+    /// Covered prayers in prayer order; the others stay the user's.
+    pub prayers: Vec<OrganizationPrayerDto>,
+}
+
+/// The followed Organization, for the Settings page and the prayer list.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(TS), ts(export))]
+pub struct OrganizationStatusDto {
+    pub feed_url: String,
+    pub host: String,
+    /// `None` until the feed has been fetched once.
+    pub name: Option<String>,
+    /// Covered prayers of the last good feed (empty when none, or when it
+    /// is for another timezone).
+    pub prayers: Vec<OrganizationPrayerDto>,
+    /// The feed's `updatedAt`, as published (RFC3339).
+    pub updated_at: Option<String>,
+    /// The last successful fetch (RFC3339, Location offset).
+    pub last_fetched_at: Option<String>,
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -711,6 +794,30 @@ mod tests {
         assert!(s.prayer_settings.get(Prayer::Fajr).enabled);
         assert!(!s.get_ready_enabled);
         assert!(s.start_alarm_enabled);
+    }
+
+    #[test]
+    fn settings_from_before_organizations_load_unfollowed_with_their_location() {
+        // Written by v0.5.1: no `organization` field.
+        let json = r#"{"location":{"city":"Dhaka","country":"Bangladesh","countryCode":"BD",
+            "timezone":"Asia/Dhaka","region":null,"coordinates":null},"method":1,
+            "prayerSettings":{"asr":{"enabled":true,"prayAfterMinutes":20}}}"#;
+        let s = settings_from_json(json).unwrap();
+        assert_eq!(s.location.as_ref().map(|l| l.city.as_str()), Some("Dhaka"));
+        assert_eq!(s.organization, None);
+        assert_eq!(s.prayer_settings.get(Prayer::Asr).pray_after_minutes, Some(20));
+    }
+
+    #[test]
+    fn a_followed_organization_round_trips() {
+        let mut s = Settings::default();
+        s.organization = Some(OrganizationLink {
+            feed_url: "https://baitulaman.example/prayer-times.json".into(),
+            access_key: Some("k-123".into()),
+        });
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""organization":{"feedUrl":"https://baitulaman.example/prayer-times.json","accessKey":"k-123"}"#));
+        assert_eq!(settings_from_json(&json).unwrap().organization, s.organization);
     }
 
     #[test]

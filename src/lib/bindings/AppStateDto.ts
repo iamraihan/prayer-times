@@ -2,6 +2,7 @@
 import type { ActiveAlarmDto } from "./ActiveAlarmDto";
 import type { DayTimingsDto } from "./DayTimingsDto";
 import type { NextPrayerDto } from "./NextPrayerDto";
+import type { OrganizationStatusDto } from "./OrganizationStatusDto";
 import type { Prayer } from "./Prayer";
 import type { Settings } from "./Settings";
 import type { TourStep } from "./TourStep";
@@ -21,4 +22,8 @@ locationWarning: string | null,
  * Tour Steps the user has seen; `None` when `app.db` can't be read,
  * in which case the UI shows no Tours.
  */
-seenTourSteps: Array<TourStep> | null, };
+seenTourSteps: Array<TourStep> | null, 
+/**
+ * The followed Organization; `None` when not following one.
+ */
+organization: OrganizationStatusDto | null, };

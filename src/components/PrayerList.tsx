@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { Check, Sunrise } from "lucide-react";
+import { Check, Lock, Sunrise } from "lucide-react";
 import { useAppState, useNow } from "../store/useAppStore";
 import { PRAYERS, PRAYER_LABELS, type Prayer, type PrayerTime } from "../lib/types";
-import { fmtHM, parseHM, type TimeFormat } from "../lib/time";
+import { fmtHM, fmtInstant, parseHM, type TimeFormat } from "../lib/time";
 import { setPrayerDone } from "../lib/actions";
 import { PrayerIcon } from "./PrayerIcon";
 import { cn } from "../lib/cn";
@@ -117,6 +117,18 @@ function PrayerRow({ time, mode, done, isNext, now, after }: PrayerRowProps) {
             {status === "current" && <span className="text-emerald-300/90"> · now</span>}
             {status === "past" && <span className="text-slate-400"> · time ended</span>}
           </p>
+          {time.ownTimeSource === "organization" && time.prayAt && (
+            <p className="tnum mt-0.5 flex items-center gap-1 text-[12px] text-emerald-300/80">
+              <Lock className="h-3 w-3" aria-hidden />
+              Jamaat {fmtInstant(time.prayAt, mode)}
+              <span className="sr-only"> (set by your organization)</span>
+            </p>
+          )}
+          {time.ownTimeSource === "organizationIgnored" && (
+            <p className="mt-0.5 text-[12px] text-amber-300/90">
+              Organization's time is outside today's window; using your own setting
+            </p>
+          )}
         </div>
         <span
           className={cn(

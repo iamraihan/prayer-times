@@ -11,9 +11,9 @@ use crate::aladhan::{self, FetchParams, Place};
 use crate::engine::{self, Engine};
 use crate::models::{
     AppStateDto, BackupPreviewDto, HistoryMonthDto, HistoryStatus, AsrSchool, CityMatchDto, Coordinates, Location, LocationPreviewDto, Prayer,
-    PreviewRequest, Settings, TourStep, TourStepStatus,
+    OrganizationLink, OrganizationPreviewDto, PreviewRequest, Settings, TourStep, TourStepStatus,
 };
-use crate::{geocode, timeutil, tzcountry, windows};
+use crate::{geocode, organization, timeutil, tzcountry, windows};
 use crate::SharedEngine;
 
 fn with_engine<R>(shared: &SharedEngine, f: impl FnOnce(&mut Engine) -> R) -> R {
@@ -79,7 +79,7 @@ pub async fn preview_location(req: PreviewRequest) -> Result<LocationPreviewDto,
         };
 
         Ok(LocationPreviewDto {
-            day: engine::day_timings_dto(&day, Some(tz), false),
+            day: engine::day_timings_dto(&day, Some(tz), false, None),
             location,
         })
     })
@@ -177,6 +177,105 @@ pub fn update_settings(
     });
     engine::wake_up(&shared);
     saved.map_err(|e| format!("couldn't write settings file: {e}"))?;
+    Ok(dto)
+}
+
+// -- Organization ------------------------------------------------------------
+
+/// A pasted link and key, tidied: surrounding spaces dropped, an empty key
+/// is no key.
+fn organization_link(feed_url: String, access_key: Option<String>) -> OrganizationLink {
+    OrganizationLink {
+        feed_url: feed_url.trim().to_string(),
+        access_key: access_key
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty()),
+    }
+}
+
+/// Downloads and checks the feed for the current Location's timezone,
+/// returning the document and its parsed form.
+async fn download_feed(
+    shared: &State<'_, SharedEngine>,
+    link: OrganizationLink,
+) -> Result<(String, organization::OrganizationFeed), String> {
+    let tz = with_engine(shared, |engine| {
+        engine.settings.location.as_ref().map(|l| l.timezone.clone())
+    })
+    .ok_or_else(|| "Set your location first".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let body = organization::fetch(&http_client()?, &link).map_err(|e| e.to_string())?;
+        let feed = organization::parse_feed(&body, &tz).map_err(|e| e.to_string())?;
+        Ok((body, feed))
+    })
+    .await
+    .map_err(|e| format!("feed task failed: {e}"))?
+}
+
+/// Fetches and checks an Organization Feed without following it, for the
+/// confirmation step.
+#[tauri::command]
+pub async fn preview_organization(
+    shared: State<'_, SharedEngine>,
+    feed_url: String,
+    access_key: Option<String>,
+) -> Result<OrganizationPreviewDto, String> {
+    let link = organization_link(feed_url, access_key);
+    let (_, feed) = download_feed(&shared, link.clone()).await?;
+    Ok(organization::preview_dto(&link.feed_url, &feed))
+}
+
+/// Follows an Organization (or saves a changed link or key): fetches the
+/// feed again, and changes nothing if it can't be used.
+#[tauri::command]
+pub async fn follow_organization(
+    shared: State<'_, SharedEngine>,
+    feed_url: String,
+    access_key: Option<String>,
+) -> Result<AppStateDto, String> {
+    let link = organization_link(feed_url, access_key);
+    let (body, _) = download_feed(&shared, link.clone()).await?;
+    let (saved, dto) = with_engine(&shared, |engine| {
+        let saved = engine.follow_organization(link, body);
+        engine.tick();
+        (saved, engine.snapshot())
+    });
+    engine::wake_up(&shared);
+    saved.map_err(|e| format!("couldn't write settings file: {e}"))?;
+    Ok(dto)
+}
+
+#[tauri::command]
+pub fn leave_organization(shared: State<'_, SharedEngine>) -> Result<AppStateDto, String> {
+    let (saved, dto) = with_engine(&shared, |engine| {
+        let saved = engine.leave_organization();
+        engine.tick();
+        (saved, engine.snapshot())
+    });
+    engine::wake_up(&shared);
+    saved.map_err(|e| format!("couldn't write settings file: {e}"))?;
+    Ok(dto)
+}
+
+/// "Refresh now": fetches the followed feed at once. A failure shows up as
+/// the Organization's warning; the last good times stay.
+#[tauri::command]
+pub async fn refresh_organization(shared: State<'_, SharedEngine>) -> Result<AppStateDto, String> {
+    let Some(job) = with_engine(&shared, |engine| engine.plan_organization_fetch(true)) else {
+        return Ok(with_engine(&shared, |engine| engine.snapshot()));
+    };
+    let (job, result) = tauri::async_runtime::spawn_blocking(move || {
+        let result = organization::fetch(&job.client, &job.link);
+        (job, result)
+    })
+    .await
+    .map_err(|e| format!("feed task failed: {e}"))?;
+    let dto = with_engine(&shared, |engine| {
+        engine.store_organization(&job, result);
+        engine.tick();
+        engine.snapshot()
+    });
+    engine::wake_up(&shared);
     Ok(dto)
 }
 

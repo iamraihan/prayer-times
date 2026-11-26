@@ -10,6 +10,7 @@ import type {
   CityMatch,
   Location,
   LocationPreview,
+  OrganizationPreview,
   Prayer,
   Settings,
   TourStep,
@@ -31,6 +32,25 @@ export async function saveLocation(
 
 export async function updateSettings(settings: Settings): Promise<void> {
   apply(await api.updateSettings(settings));
+}
+
+export function previewOrganization(
+  feedUrl: string,
+  accessKey: string | null,
+): Promise<OrganizationPreview> {
+  return api.previewOrganization(feedUrl, accessKey);
+}
+
+export async function followOrganization(feedUrl: string, accessKey: string | null): Promise<void> {
+  apply(await api.followOrganization(feedUrl, accessKey));
+}
+
+export async function leaveOrganization(): Promise<void> {
+  apply(await api.leaveOrganization());
+}
+
+export async function refreshOrganization(): Promise<void> {
+  apply(await api.refreshOrganization());
 }
 
 export async function setPrayerDone(prayer: Prayer, done: boolean): Promise<void> {
