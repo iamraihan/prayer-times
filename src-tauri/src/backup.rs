@@ -22,12 +22,17 @@ pub struct BackupFile {
     pub history: Vec<HistoryEntry>,
 }
 
+/// The followed Organization is left out: an import keeps the device's own
+/// (`settings_to_apply`), and its access key shouldn't travel in a file.
 pub fn to_json(settings: &Settings, history: Vec<HistoryEntry>, now: DateTime<Utc>) -> String {
     let file = BackupFile {
         format: FORMAT.into(),
         version: VERSION,
         exported_at: now.to_rfc3339(),
-        settings: settings.clone(),
+        settings: Settings {
+            organization: None,
+            ..settings.clone()
+        },
         history,
     };
     serde_json::to_string_pretty(&file).unwrap_or_default()
@@ -50,12 +55,14 @@ pub fn parse(text: &str) -> Result<BackupFile, String> {
 
 /// The settings an import applies: the backup's, except that this device
 /// keeps its location when the backup has none, and always keeps its own
-/// alarm tone (the tone file isn't in backups).
+/// alarm tone (the tone file isn't in backups) and its own followed
+/// Organization (whose feed is tied to this device's Location).
 pub fn settings_to_apply(current: &Settings, mut incoming: Settings) -> Settings {
     if incoming.location.is_none() {
         incoming.location = current.location.clone();
     }
     incoming.alarm_sound = current.alarm_sound.clone();
+    incoming.organization = current.organization.clone();
     incoming
 }
 
@@ -157,5 +164,35 @@ mod tests {
         assert_eq!(p.last_day.as_deref(), Some("2026-11-08"));
         assert_eq!(p.location.as_deref(), Some("Dhaka"));
         assert!(p.has_custom_tone);
+    }
+
+    #[test]
+    fn an_import_keeps_this_devices_organization() {
+        // The feed is tied to this device's Location, like the location itself.
+        let link = |url: &str| crate::models::OrganizationLink {
+            feed_url: url.to_string(),
+            access_key: None,
+        };
+        let mut current = Settings::default();
+        current.organization = Some(link("https://here.example/feed.json"));
+        let mut incoming = Settings::default();
+        incoming.organization = Some(link("https://there.example/feed.json"));
+        assert_eq!(settings_to_apply(&current, incoming.clone()).organization, current.organization);
+        current.organization = None;
+        assert_eq!(settings_to_apply(&current, incoming).organization, None);
+    }
+
+    #[test]
+    fn backups_leave_out_the_followed_organization() {
+        // An import never applies it (see above), and its access key
+        // shouldn't travel in a file the user may share.
+        let mut s = Settings::default();
+        s.organization = Some(crate::models::OrganizationLink {
+            feed_url: "https://here.example/feed.json".into(),
+            access_key: Some("k-123".into()),
+        });
+        let json = to_json(&s, Vec::new(), chrono::Utc::now());
+        assert!(!json.contains("k-123"), "{json}");
+        assert!(!json.contains("here.example"), "{json}");
     }
 }

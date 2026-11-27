@@ -52,6 +52,24 @@ The convention (e.g. Muslim World League) used to calculate Fajr and Isha from t
 The juristic rule for when Asr starts: Standard (Shafi'i, Maliki, Hanbali) or Hanafi (later).
 _Avoid_: Madhab (too broad)
 
+### Organization
+
+**Organization**:
+A masjid or other group whose jamaat times the user follows. Shown as "Masjid / Organization" in the UI. Following one needs no account: it is a link (and optional Access Key) saved on this device.
+_Avoid_: Mosque (in code), group, community, membership
+
+**Organization Feed**:
+The small JSON document an Organization publishes at a link: its name, timezone and the time of 1 to 5 prayers. Fetched when the user follows or saves, then once a day at 13:00 Location Time (polling, not a webhook). See `docs/organization-feed.md`.
+_Avoid_: API (in code and docs; the UI field is labelled "API link" because that is what organizations call it), webhook
+
+**Followed Prayer**:
+A prayer the followed Organization's feed covers. Its Own Prayer Time is the Organization's time and the user can't change it. The Prayer Window, and so the Before-End Warning, still come from the Timetable. Prayers the feed doesn't cover keep the user's own setting.
+_Avoid_: Locked prayer (in code), override
+
+**Access Key**:
+An optional key an Organization gives its members, sent as `Authorization: Bearer`. Everyone shares it, so it limits who uses the feed; it doesn't keep the times secret.
+_Avoid_: Token, password
+
 ### Alarms
 
 **Event**:
@@ -59,7 +77,7 @@ A planned moment in a Prayer Day when the app should alert the user about one pr
 _Avoid_: Notification (that is one way an Alarm is shown)
 
 **Own Prayer Time**:
-When the user actually prays a prayer: its start time, or a set number of minutes after it ("I pray 75 min after it starts", e.g. with a mosque), never in the window's last 5 minutes. It follows the start time from day to day. The Get-Ready and Main Alarms are tied to it; the Prayer Window and Before-End Warning are not.
+When the user actually prays a prayer: its start time, or a set number of minutes after it ("I pray 75 min after it starts", e.g. with a mosque), never in the window's last 5 minutes. It follows the start time from day to day. For a Followed Prayer it is the Organization's time instead. The Get-Ready and Main Alarms are tied to it; the Prayer Window and Before-End Warning are not.
 _Avoid_: Jamaat time, iqamah (in code), delay
 
 **Get-Ready Alarm**:

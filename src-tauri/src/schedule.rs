@@ -8,7 +8,8 @@ use chrono::{DateTime, Duration, NaiveDate, NaiveTime};
 use chrono_tz::Tz;
 
 use crate::aladhan::DayTimings;
-use crate::models::{Prayer, Settings};
+use crate::models::{OwnTimeSource, Prayer, Settings};
+use crate::organization::OrganizationPrayers;
 use crate::timeutil;
 
 /// Fire events up to this long after their scheduled time; older ones are
@@ -44,6 +45,8 @@ pub struct PrayerWindow {
     pub prayer: Prayer,
     pub start: DateTime<Tz>,
     pub end: DateTime<Tz>,
+    /// The Own Prayer Time (see `own_prayer_time`).
+    pub pray_at: DateTime<Tz>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +82,102 @@ pub fn pray_time(start: DateTime<Tz>, end: DateTime<Tz>, after: Option<u32>) -> 
         .checked_sub_signed(Duration::minutes(PRAY_TIME_END_MARGIN_MINUTES))
         .unwrap_or(start);
     target.min(latest).max(start)
+}
+
+/// A prayer's Own Prayer Time and where it comes from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OwnPrayerTime {
+    pub at: DateTime<Tz>,
+    pub source: OwnTimeSource,
+}
+
+/// The Own Prayer Time for a window `[start, end)`: the followed
+/// Organization's time when it covers the prayer, otherwise the user's
+/// `after` (see `pray_time`). An Organization time earlier than the start
+/// belongs to the next date (Isha at 00:30). One that falls outside
+/// `[start, end − 5 min]`, or in a DST gap, is ignored rather than clamped:
+/// clamping would ring at a time the Organization never announced.
+pub fn own_prayer_time(
+    start: DateTime<Tz>,
+    end: DateTime<Tz>,
+    after: Option<u32>,
+    organization: Option<NaiveTime>,
+) -> OwnPrayerTime {
+    let user = |source| OwnPrayerTime {
+        at: pray_time(start, end, after),
+        source,
+    };
+    let Some(time) = organization else {
+        return user(OwnTimeSource::User);
+    };
+    let latest = end - Duration::minutes(PRAY_TIME_END_MARGIN_MINUTES);
+    match timeutil::resolve_after(start.timezone(), start.date_naive(), time, start.time()) {
+        Some(at) if at >= start && at <= latest => OwnPrayerTime {
+            at,
+            source: OwnTimeSource::Organization,
+        },
+        _ => user(OwnTimeSource::OrganizationIgnored),
+    }
+}
+
+/// The Own Prayer Time of `prayer` for its window `[start, end)`, from the
+/// user's settings and the followed Organization's times (if any).
+pub fn own_prayer_time_for(
+    prayer: Prayer,
+    start: DateTime<Tz>,
+    end: DateTime<Tz>,
+    settings: &Settings,
+    organization: Option<&OrganizationPrayers>,
+) -> OwnPrayerTime {
+    own_prayer_time(
+        start,
+        end,
+        settings.prayer_settings.get(prayer).pray_after_minutes,
+        organization.and_then(|o| o.get(prayer)),
+    )
+}
+
+// -- Organization Feed refresh ------------------------------------------------
+
+/// The followed Organization's feed is fetched again daily at this Location
+/// Time (or at the first tick after it, when the app wasn't running then).
+pub const ORGANIZATION_REFRESH_AT: (u32, u32) = (13, 0);
+/// After a failed fetch of the feed, wait this long before trying again.
+pub const ORGANIZATION_RETRY_AFTER_MINUTES: i64 = 15;
+
+/// Whether to fetch the followed Organization's feed at `now` (Location
+/// Time): never fetched, the latest attempt failed, or not fetched since the
+/// latest `ORGANIZATION_REFRESH_AT`; but never within
+/// `ORGANIZATION_RETRY_AFTER_MINUTES` of a failed attempt.
+pub fn organization_refresh_due(
+    last_success: Option<DateTime<chrono::Utc>>,
+    last_failure: Option<DateTime<chrono::Utc>>,
+    now: DateTime<Tz>,
+) -> bool {
+    if let Some(failed) = last_failure {
+        if now.with_timezone(&chrono::Utc) - failed < Duration::minutes(ORGANIZATION_RETRY_AFTER_MINUTES) {
+            return false;
+        }
+        // Retry any failure that came after the last success (a manual
+        // Refresh after today's check, say), not only the daily one.
+        if last_success.is_none_or(|ok| failed > ok) {
+            return true;
+        }
+    }
+    let Some(last) = last_success else {
+        return true;
+    };
+    let local_now = now.naive_local();
+    let (h, m) = ORGANIZATION_REFRESH_AT;
+    let Some(today_at) = local_now.date().and_hms_opt(h, m, 0) else {
+        return true;
+    };
+    let boundary = if local_now >= today_at {
+        today_at
+    } else {
+        today_at - Duration::days(1)
+    };
+    last.with_timezone(&now.timezone()).naive_local() < boundary
 }
 
 /// The end of a prayer's valid window:
@@ -125,14 +224,27 @@ pub fn prayer_day(now: DateTime<Tz>, tz: Tz, yesterday: Option<&DayTimings>) -> 
     today
 }
 
-/// The windows of the prayers whose alarms are switched on, in order.
-pub fn windows(day: &DayTimings, tz: Tz, settings: &Settings) -> Vec<PrayerWindow> {
+/// The windows of the prayers whose alarms are switched on, in order, with
+/// each one's Own Prayer Time (`organization` = the followed Organization's
+/// times, if any).
+pub fn windows(
+    day: &DayTimings,
+    tz: Tz,
+    settings: &Settings,
+    organization: Option<&OrganizationPrayers>,
+) -> Vec<PrayerWindow> {
     Prayer::ALL
         .into_iter()
         .filter(|p| settings.prayer_settings.get(*p).enabled)
         .filter_map(|prayer| {
             let (start, end) = window(prayer, day, tz)?;
-            Some(PrayerWindow { prayer, start, end })
+            let OwnPrayerTime { at, .. } = own_prayer_time_for(prayer, start, end, settings, organization);
+            Some(PrayerWindow {
+                prayer,
+                start,
+                end,
+                pray_at: at,
+            })
         })
         .collect()
 }
@@ -159,12 +271,12 @@ pub fn compute(
     tz: Tz,
     settings: &Settings,
     day_begins: Option<DateTime<Tz>>,
+    organization: Option<&OrganizationPrayers>,
 ) -> Vec<PlannedEvent> {
     let day_begins = day_begins.or_else(|| day_start(day, tz, None));
     let mut events = Vec::new();
 
-    for PrayerWindow { prayer, start, end } in windows(day, tz, settings) {
-        let pray_at = pray_time(start, end, settings.prayer_settings.get(prayer).pray_after_minutes);
+    for PrayerWindow { prayer, start, end, pray_at, .. } in windows(day, tz, settings, organization) {
         let event = |kind, at| PlannedEvent {
             kind,
             prayer,
@@ -449,7 +561,7 @@ mod tests {
     #[test]
     fn default_settings_ring_at_start_and_before_end() {
         let day = dhaka_day("2026-11-09");
-        let events = compute(&day, DHAKA, &Settings::default(), None);
+        let events = compute(&day, DHAKA, &Settings::default(), None, None);
 
         let dhuhr = find(&events, Prayer::Dhuhr, EventKind::Start).unwrap();
         assert_eq!(dhuhr.at, at(DHAKA, "2026-11-09", "11:50"));
@@ -471,7 +583,7 @@ mod tests {
     #[test]
     fn get_ready_rings_before_start_and_keeps_the_start_alarm() {
         let day = dhaka_day("2026-11-09");
-        let events = compute(&day, DHAKA, &get_ready(10), None);
+        let events = compute(&day, DHAKA, &get_ready(10), None, None);
         let early = find(&events, Prayer::Asr, EventKind::GetReady).unwrap();
         assert_eq!(early.at, at(DHAKA, "2026-11-09", "15:30"));
         assert_eq!(early.pray_at, at(DHAKA, "2026-11-09", "15:40"));
@@ -482,7 +594,7 @@ mod tests {
     #[test]
     fn get_ready_is_clamped_to_an_hour() {
         let day = dhaka_day("2026-11-09");
-        let events = compute(&day, DHAKA, &get_ready(500), None);
+        let events = compute(&day, DHAKA, &get_ready(500), None, None);
         let early = find(&events, Prayer::Asr, EventKind::GetReady).unwrap();
         assert_eq!(early.at, at(DHAKA, "2026-11-09", "14:40"));
     }
@@ -498,7 +610,7 @@ mod tests {
         day.times.insert(Prayer::Fajr, t("02:00"));
         let begins = day_start(&day, LONDON, Some(&yesterday));
         assert_eq!(begins, Some(at(LONDON, "2026-06-21", "01:20")));
-        let events = compute(&day, LONDON, &get_ready(60), begins);
+        let events = compute(&day, LONDON, &get_ready(60), begins, None);
         let early = find(&events, Prayer::Fajr, EventKind::GetReady).unwrap();
         assert_eq!(early.at, at(LONDON, "2026-06-21", "01:20"));
         // And the engine is really on this Prayer Day by then.
@@ -546,7 +658,7 @@ mod tests {
         let day = dhaka_day("2026-11-09");
         let mut s = get_ready(30);
         pray_after(Prayer::Asr, 5, &mut s);
-        let events = compute(&day, DHAKA, &s, None);
+        let events = compute(&day, DHAKA, &s, None, None);
         let early = find(&events, Prayer::Asr, EventKind::GetReady).unwrap();
         assert_eq!(early.at, at(DHAKA, "2026-11-09", "15:15"));
         assert_eq!(early.pray_at, at(DHAKA, "2026-11-09", "15:45"));
@@ -570,8 +682,119 @@ mod tests {
     fn get_ready_dropped_when_prayer_starts_at_the_day_boundary() {
         let mut day = london_summer_day("2026-06-21");
         day.times.insert(Prayer::Fajr, t("00:00"));
-        let events = compute(&day, LONDON, &get_ready(10), None);
+        let events = compute(&day, LONDON, &get_ready(10), None, None);
         assert!(find(&events, Prayer::Fajr, EventKind::GetReady).is_none());
+    }
+
+    // -- own_prayer_time (Organization) ----------------------------------------
+
+    fn org(prayer: Prayer, hm: &str) -> OrganizationPrayers {
+        let mut o = OrganizationPrayers::default();
+        match prayer {
+            Prayer::Fajr => o.fajr = Some(t(hm)),
+            Prayer::Dhuhr => o.dhuhr = Some(t(hm)),
+            Prayer::Asr => o.asr = Some(t(hm)),
+            Prayer::Maghrib => o.maghrib = Some(t(hm)),
+            Prayer::Isha => o.isha = Some(t(hm)),
+        }
+        o
+    }
+
+    #[test]
+    fn an_organization_time_replaces_the_users_offset() {
+        // Asr 15:40 → 17:20; the masjid prays at 16:00, the user had "30 min after".
+        let (start, end) = window(Prayer::Asr, &dhaka_day("2026-11-09"), DHAKA).unwrap();
+        let own = own_prayer_time(start, end, Some(30), Some(t("16:00")));
+        assert_eq!(own.at, at(DHAKA, "2026-11-09", "16:00"));
+        assert_eq!(own.source, OwnTimeSource::Organization);
+    }
+
+    #[test]
+    fn without_an_organization_time_the_users_offset_applies() {
+        let (start, end) = window(Prayer::Maghrib, &dhaka_day("2026-11-09"), DHAKA).unwrap();
+        let own = own_prayer_time(start, end, Some(10), None);
+        assert_eq!(own.at, at(DHAKA, "2026-11-09", "17:30"));
+        assert_eq!(own.source, OwnTimeSource::User);
+        assert_eq!(own.at, pray_time(start, end, Some(10)));
+    }
+
+    #[test]
+    fn an_organization_time_outside_the_window_is_ignored_not_clamped() {
+        // Asr 15:40 → 17:20. 12:00 is before it starts; 17:18 is inside its
+        // last 5 minutes; 18:00 is after it ends.
+        let (start, end) = window(Prayer::Asr, &dhaka_day("2026-11-09"), DHAKA).unwrap();
+        for hm in ["12:00", "15:39", "17:18", "18:00"] {
+            let own = own_prayer_time(start, end, Some(20), Some(t(hm)));
+            assert_eq!(own.source, OwnTimeSource::OrganizationIgnored, "{hm}");
+            assert_eq!(own.at, at(DHAKA, "2026-11-09", "16:00"), "{hm}");
+        }
+        // The edges are allowed.
+        assert_eq!(own_prayer_time(start, end, None, Some(t("15:40"))).source, OwnTimeSource::Organization);
+        assert_eq!(own_prayer_time(start, end, None, Some(t("17:15"))).source, OwnTimeSource::Organization);
+    }
+
+    #[test]
+    fn an_organization_isha_after_midnight_is_on_the_next_date() {
+        // London summer: Isha 22:55 → midnight 01:05; the masjid prays at 00:30.
+        let (start, end) = window(Prayer::Isha, &london_summer_day("2026-06-20"), LONDON).unwrap();
+        let own = own_prayer_time(start, end, None, Some(t("00:30")));
+        assert_eq!(own.at, at(LONDON, "2026-06-21", "00:30"));
+        assert_eq!(own.source, OwnTimeSource::Organization);
+    }
+
+    #[test]
+    fn an_organization_time_in_a_dst_gap_is_ignored() {
+        // London springs forward 01:00 → 02:00 on 2026-03-29: 01:30 doesn't exist.
+        let mut day = london_summer_day("2026-03-28");
+        day.times.insert(Prayer::Isha, t("23:30"));
+        day.midnight = t("02:30");
+        let (start, end) = window(Prayer::Isha, &day, LONDON).unwrap();
+        let own = own_prayer_time(start, end, None, Some(t("01:30")));
+        assert_eq!(own.source, OwnTimeSource::OrganizationIgnored);
+        assert_eq!(own.at, start);
+    }
+
+    #[test]
+    fn an_organization_time_in_a_dst_overlap_takes_the_first_instant() {
+        // London falls back 02:00 BST → 01:00 GMT on 2026-10-25: 01:30 happens twice.
+        let mut day = london_summer_day("2026-10-24");
+        day.times.insert(Prayer::Isha, t("23:00"));
+        day.midnight = t("02:30");
+        let (start, end) = window(Prayer::Isha, &day, LONDON).unwrap();
+        let own = own_prayer_time(start, end, None, Some(t("01:30")));
+        assert_eq!(own.source, OwnTimeSource::Organization);
+        assert_eq!(own.at.to_rfc3339(), "2026-10-25T01:30:00+01:00");
+    }
+
+    #[test]
+    fn an_organization_time_on_the_first_of_a_month() {
+        let (start, end) = window(Prayer::Fajr, &dhaka_day("2026-12-01"), DHAKA).unwrap();
+        let own = own_prayer_time(start, end, None, Some(t("05:30")));
+        assert_eq!(own.at, at(DHAKA, "2026-12-01", "05:30"));
+    }
+
+    #[test]
+    fn alarms_follow_the_organization_and_the_window_does_not_move() {
+        // The masjid covers Asr (16:00) only; the user prays Dhuhr 70 min after.
+        let day = dhaka_day("2026-11-09");
+        let mut s = get_ready(10);
+        pray_after(Prayer::Asr, 30, &mut s);
+        pray_after(Prayer::Dhuhr, 70, &mut s);
+        let o = org(Prayer::Asr, "16:00");
+        let events = compute(&day, DHAKA, &s, None, Some(&o));
+
+        let asr = find(&events, Prayer::Asr, EventKind::Start).unwrap();
+        assert_eq!(asr.at, at(DHAKA, "2026-11-09", "16:00"));
+        assert_eq!(find(&events, Prayer::Asr, EventKind::GetReady).unwrap().at, at(DHAKA, "2026-11-09", "15:50"));
+        assert_eq!(asr.start, at(DHAKA, "2026-11-09", "15:40"));
+        assert_eq!(find(&events, Prayer::Asr, EventKind::PreEnd).unwrap().at, at(DHAKA, "2026-11-09", "17:10"));
+        // Not covered: the user's own setting, and Dhuhr's end is unchanged.
+        assert_eq!(find(&events, Prayer::Dhuhr, EventKind::Start).unwrap().at, at(DHAKA, "2026-11-09", "13:00"));
+        assert_eq!(find(&events, Prayer::Dhuhr, EventKind::PreEnd).unwrap().at, at(DHAKA, "2026-11-09", "15:30"));
+
+        // Leaving the Organization brings the user's own Asr time back.
+        let events = compute(&day, DHAKA, &s, None, None);
+        assert_eq!(find(&events, Prayer::Asr, EventKind::Start).unwrap().at, at(DHAKA, "2026-11-09", "16:10"));
     }
 
     fn pray_after(prayer: Prayer, mins: u32, s: &mut Settings) {
@@ -584,7 +807,7 @@ mod tests {
         let day = dhaka_day("2026-11-09");
         let mut s = get_ready(10);
         pray_after(Prayer::Dhuhr, 70, &mut s);
-        let events = compute(&day, DHAKA, &s, None);
+        let events = compute(&day, DHAKA, &s, None, None);
 
         let early = find(&events, Prayer::Dhuhr, EventKind::GetReady).unwrap();
         assert_eq!(early.at, at(DHAKA, "2026-11-09", "12:50"));
@@ -604,7 +827,7 @@ mod tests {
         day.times.insert(Prayer::Dhuhr, t("12:05"));
         let mut s = Settings::default();
         pray_after(Prayer::Dhuhr, 70, &mut s);
-        let events = compute(&day, DHAKA, &s, None);
+        let events = compute(&day, DHAKA, &s, None, None);
         let main = find(&events, Prayer::Dhuhr, EventKind::Start).unwrap();
         assert_eq!(main.at, at(DHAKA, "2026-11-10", "13:15"));
     }
@@ -615,7 +838,7 @@ mod tests {
         let day = dhaka_day("2026-11-09");
         let mut s = Settings::default();
         pray_after(Prayer::Fajr, 500, &mut s);
-        let events = compute(&day, DHAKA, &s, None);
+        let events = compute(&day, DHAKA, &s, None, None);
         let main = find(&events, Prayer::Fajr, EventKind::Start).unwrap();
         assert_eq!(main.at, at(DHAKA, "2026-11-09", "06:10"));
         // "Don't miss it" (06:05) would now ring before the prayer time:
@@ -628,7 +851,7 @@ mod tests {
         let day = dhaka_day("2026-11-09");
         let mut s = Settings::default();
         s.start_alarm_enabled = false;
-        let events = compute(&day, DHAKA, &s, None);
+        let events = compute(&day, DHAKA, &s, None, None);
         assert!(events.iter().all(|e| e.kind != EventKind::Start));
     }
 
@@ -637,7 +860,7 @@ mod tests {
         let day = dhaka_day("2026-11-09");
         let mut s = Settings::default();
         s.prayer_settings.get_mut(Prayer::Asr).enabled = false;
-        let events = compute(&day, DHAKA, &s, None);
+        let events = compute(&day, DHAKA, &s, None, None);
         assert!(events.iter().all(|e| e.prayer != Prayer::Asr));
     }
 
@@ -646,7 +869,7 @@ mod tests {
         let day = dhaka_day("2026-11-09");
         let mut s = Settings::default();
         s.pre_end_warning_enabled = false;
-        let events = compute(&day, DHAKA, &s, None);
+        let events = compute(&day, DHAKA, &s, None, None);
         assert!(events.iter().all(|e| e.kind == EventKind::Start));
     }
 
@@ -658,14 +881,14 @@ mod tests {
         day.times.insert(Prayer::Isha, t("17:30"));
         let mut s = Settings::default();
         s.pre_end_warning_minutes = 9;
-        let events = compute(&day, DHAKA, &s, None);
+        let events = compute(&day, DHAKA, &s, None, None);
         assert!(find(&events, Prayer::Maghrib, EventKind::PreEnd).is_none());
     }
 
     #[test]
     fn isha_pre_end_warning_lands_after_midnight() {
         let day = london_summer_day("2026-06-20");
-        let events = compute(&day, LONDON, &Settings::default(), None);
+        let events = compute(&day, LONDON, &Settings::default(), None, None);
         let warn = find(&events, Prayer::Isha, EventKind::PreEnd).unwrap();
         assert_eq!(warn.at, at(LONDON, "2026-06-21", "00:55"));
     }
@@ -698,7 +921,7 @@ mod tests {
     /// Dhaka 2026-11-09 with default settings: Asr 15:40 → 17:20, Main Alarm
     /// at 15:40, Before-End Warning at 17:10.
     fn dhaka_events(settings: &Settings) -> Vec<PlannedEvent> {
-        compute(&dhaka_day("2026-11-09"), DHAKA, settings, None)
+        compute(&dhaka_day("2026-11-09"), DHAKA, settings, None, None)
     }
 
     /// The decision for one prayer's event when nothing has fired yet.
@@ -817,7 +1040,7 @@ mod tests {
     #[test]
     fn isha_main_alarm_slept_through_rings_late_after_midnight() {
         // London summer Isha 22:55 → 01:05; asleep 22:50, woke 00:30.
-        let events = compute(&london_summer_day("2026-06-20"), LONDON, &Settings::default(), None);
+        let events = compute(&london_summer_day("2026-06-20"), LONDON, &Settings::default(), None, None);
         let last_tick = Some(at(LONDON, "2026-06-20", "22:50"));
         let now = at(LONDON, "2026-06-21", "00:30");
         assert_eq!(decided(&events, Prayer::Isha, EventKind::Start, now, last_tick, false), Due::Fire);
@@ -840,7 +1063,7 @@ mod tests {
             "2026-03-29",
             ["04:45", "06:40", "13:05", "16:40", "19:30", "20:55", "01:05"],
         );
-        let events = compute(&day, LONDON, &Settings::default(), None);
+        let events = compute(&day, LONDON, &Settings::default(), None, None);
         let last_tick = Some(at(LONDON, "2026-03-29", "00:30"));
         let now = at(LONDON, "2026-03-29", "05:10");
         assert_eq!(decided(&events, Prayer::Fajr, EventKind::Start, now, last_tick, false), Due::Fire);
@@ -851,7 +1074,7 @@ mod tests {
     #[test]
     fn featured_prefers_open_window() {
         let day = dhaka_day("2026-11-09");
-        let ws = windows(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default(), None);
         let now = at(DHAKA, "2026-11-09", "12:00");
         let (e, current) = featured(&ws, now, |_| false).unwrap();
         assert_eq!(e.prayer, Prayer::Dhuhr);
@@ -861,7 +1084,7 @@ mod tests {
     #[test]
     fn featured_skips_done_and_picks_next_start() {
         let day = dhaka_day("2026-11-09");
-        let ws = windows(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default(), None);
         let now = at(DHAKA, "2026-11-09", "12:00");
         let (e, current) = featured(&ws, now, |p| p == Prayer::Dhuhr).unwrap();
         assert_eq!(e.prayer, Prayer::Asr);
@@ -872,7 +1095,7 @@ mod tests {
     fn featured_between_windows_is_next_prayer() {
         // 06:30: Fajr closed at sunrise, Dhuhr not started yet.
         let day = dhaka_day("2026-11-09");
-        let ws = windows(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default(), None);
         let now = at(DHAKA, "2026-11-09", "06:30");
         let (e, current) = featured(&ws, now, |_| false).unwrap();
         assert_eq!(e.prayer, Prayer::Dhuhr);
@@ -882,7 +1105,7 @@ mod tests {
     #[test]
     fn featured_isha_after_midnight() {
         let day = london_summer_day("2026-06-20");
-        let ws = windows(&day, LONDON, &Settings::default());
+        let ws = windows(&day, LONDON, &Settings::default(), None);
         let now = at(LONDON, "2026-06-21", "00:30");
         let (e, current) = featured(&ws, now, |_| false).unwrap();
         assert_eq!(e.prayer, Prayer::Isha);
@@ -894,7 +1117,7 @@ mod tests {
         // Dhuhr done; Asr's get-ready rang at 15:30. At 15:35 the upcoming
         // prayer is still Asr, not Maghrib.
         let day = dhaka_day("2026-11-09");
-        let ws = windows(&day, DHAKA, &get_ready(10));
+        let ws = windows(&day, DHAKA, &get_ready(10), None);
         let now = at(DHAKA, "2026-11-09", "15:35");
         let (w, current) = featured(&ws, now, |p| p == Prayer::Dhuhr).unwrap();
         assert_eq!(w.prayer, Prayer::Asr);
@@ -908,7 +1131,7 @@ mod tests {
         let mut s = Settings::default();
         s.start_alarm_enabled = false;
         s.pre_end_warning_enabled = false;
-        let ws = windows(&day, DHAKA, &s);
+        let ws = windows(&day, DHAKA, &s, None);
         let now = at(DHAKA, "2026-11-09", "06:30");
         let (w, _) = featured(&ws, now, |_| false).unwrap();
         assert_eq!(w.prayer, Prayer::Dhuhr);
@@ -937,7 +1160,7 @@ mod tests {
     #[test]
     fn missed_when_window_closes_while_running() {
         let day = dhaka_day("2026-11-09");
-        let ws = windows(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default(), None);
         let now = at(DHAKA, "2026-11-09", "15:45");
         assert_eq!(missed_now(&ws, now, |_| false, |_| false), vec![Prayer::Dhuhr]);
     }
@@ -946,7 +1169,7 @@ mod tests {
     fn not_missed_after_grace() {
         // Dhuhr closed 15:40; 11 minutes later the app wasn't watching.
         let day = dhaka_day("2026-11-09");
-        let ws = windows(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default(), None);
         let now = at(DHAKA, "2026-11-09", "15:51");
         assert!(missed_now(&ws, now, |_| false, |_| false).is_empty());
     }
@@ -954,7 +1177,7 @@ mod tests {
     #[test]
     fn done_or_logged_not_missed() {
         let day = dhaka_day("2026-11-09");
-        let ws = windows(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default(), None);
         let now = at(DHAKA, "2026-11-09", "15:45");
         assert!(missed_now(&ws, now, |p| p == Prayer::Dhuhr, |_| false).is_empty());
         assert!(missed_now(&ws, now, |_| false, |p| p == Prayer::Dhuhr).is_empty());
@@ -968,7 +1191,7 @@ mod tests {
         let y = london_summer_day("2026-06-20");
         let now = at(LONDON, "2026-06-21", "01:08");
         assert_eq!(prayer_day(now, LONDON, Some(&y)), d("2026-06-21"));
-        let ws = windows(&y, LONDON, &Settings::default());
+        let ws = windows(&y, LONDON, &Settings::default(), None);
         assert_eq!(missed_now(&ws, now, |_| false, |_| false), vec![Prayer::Isha]);
     }
 
@@ -976,7 +1199,7 @@ mod tests {
     fn dst_day_windows_resolve_and_report_once() {
         // London springs forward on 2026-03-29; Fajr 02:45 → sunrise 04:45.
         let day = london_summer_day("2026-03-29");
-        let ws = windows(&day, LONDON, &Settings::default());
+        let ws = windows(&day, LONDON, &Settings::default(), None);
         let now = at(LONDON, "2026-03-29", "04:48");
         assert_eq!(missed_now(&ws, now, |_| false, |_| false), vec![Prayer::Fajr]);
         assert!(missed_now(&ws, now, |_| false, |p| p == Prayer::Fajr).is_empty());
@@ -985,7 +1208,7 @@ mod tests {
     #[test]
     fn featured_none_after_last_window() {
         let day = dhaka_day("2026-11-09");
-        let ws = windows(&day, DHAKA, &Settings::default());
+        let ws = windows(&day, DHAKA, &Settings::default(), None);
         let now = at(DHAKA, "2026-11-09", "23:30");
         assert!(featured(&ws, now, |_| false).is_none());
     }

@@ -5,6 +5,7 @@ import {
   ExternalLink,
   FolderOpen,
   Loader2,
+  Lock,
   MapPin,
   RotateCcw,
   TriangleAlert,
@@ -20,6 +21,7 @@ import { Toggle } from "../components/ui/Toggle";
 import { Select, SliderField, UnitInput } from "../components/ui/fields";
 import { SetupWizard } from "../components/SetupWizard";
 import { BackupControls } from "../components/BackupControls";
+import { OrganizationSettings } from "../components/OrganizationSettings";
 import { useAppState } from "../store/useAppStore";
 import { IS_MAC, useUpdateStore } from "../store/useUpdateStore";
 import {
@@ -35,7 +37,7 @@ import {
 import { METHODS } from "../lib/methods";
 import { PRAYERS, PRAYER_LABELS, type Prayer, type Settings } from "../lib/types";
 import { cn } from "../lib/cn";
-import { fmtHourMinute, parseHM } from "../lib/time";
+import { fmtHM, fmtHourMinute, parseHM } from "../lib/time";
 import { friendlyError } from "../lib/errors";
 import { useGuide } from "../lib/useGuide";
 import { forgetShownTours } from "../lib/useTour";
@@ -266,6 +268,13 @@ export function SettingsPage() {
         )}
       </Section>
 
+      <OrganizationSettings
+        link={settings.organization}
+        status={state?.organization ?? null}
+        hasLocation={location !== null}
+        mode={draft.timeFormat}
+      />
+
       <Section title="Calculation" description="Changing these refetches the timetable.">
         <SettingRow label="Calculation method" hint="Sets the sun angles used for Fajr and Isha">
           <Select
@@ -311,6 +320,33 @@ export function SettingsPage() {
       >
         {PRAYERS.map((p) => {
           const ps = draft.prayerSettings[p];
+          // A Followed Prayer: the Organization's time, not editable.
+          const org = state?.organization;
+          const followedTime = org?.times[p] ?? null;
+          if (followedTime !== null) {
+            const ignoredToday =
+              state?.today?.timings.find((t) => t.prayer === p)?.ownTimeSource === "organizationIgnored";
+            const name = org?.name ?? "your organization";
+            return (
+              <SettingRow
+                key={p}
+                label={PRAYER_LABELS[p]}
+                hint={
+                  ignoredToday
+                    ? `Set by ${name}, but outside today's prayer time, so today you pray ${
+                        ps.prayAfterMinutes ? `${ps.prayAfterMinutes} min after the start` : "at the start"
+                      }`
+                    : `Set by ${name}`
+                }
+              >
+                <span className="tnum flex items-center gap-1.5 text-sm font-medium text-emerald-200">
+                  <Lock className="h-3.5 w-3.5 text-emerald-400/80" aria-hidden />
+                  {fmtHM(followedTime, draft.timeFormat)}
+                  <span className="sr-only">(set by {name})</span>
+                </span>
+              </SettingRow>
+            );
+          }
           return (
             <SettingRow
               key={p}
@@ -647,6 +683,7 @@ const SETTINGS_FIELDS: { [K in keyof Settings]-?: true } = {
   preEndWarningEnabled: true,
   preEndWarningMinutes: true,
   prayerSettings: true,
+  organization: true,
 };
 const SETTINGS_KEYS = Object.keys(SETTINGS_FIELDS) as (keyof Settings)[];
 
@@ -656,6 +693,8 @@ function rebase(draft: Settings, prev: Settings, next: Settings): Settings {
   for (const key of SETTINGS_KEYS) keepEdit(out, draft, prev, key);
   // The tone is always backend-owned (applied instantly, never via Save).
   out.alarmSound = next.alarmSound;
+  // So is the followed Organization (changed only by its own commands).
+  out.organization = next.organization;
   return out;
 }
 
